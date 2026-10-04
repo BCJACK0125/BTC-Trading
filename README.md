@@ -156,6 +156,8 @@ Walk-forward 每年都選到「4h、swing 5、只做多、移動停損、ATR 止
 - `api.binance.com` 會擋美國 IP（GitHub runner 在美國），所以用 `data-api.binance.vision`。
 - K 線用 `actions/cache` 增量快取。
 - 參數研究不會自動重跑，避免參數在沒人看的情況下漂移（見下方「參數更新規則」）。
+- 公開 repo 若 60 天沒有任何 commit，GitHub 會自動停用排程，而訊號更新本身不會產生 commit。workflow 裡的 `keepalive` 會在最後一次 commit 超過 45 天時推一個空 commit，讓排程持續運作。
+- 更新失敗時，網頁右上角會顯示「資料已過期」。GitHub 預設也會寄信通知 workflow 失敗（個人設定 → Notifications → Actions）。
 
 **訊號紀錄**：每次更新會把當下發布的狀態寫進 `docs/data/history.json`，儀表板的「訊號紀錄」區塊顯示狀態變化與出場結果。這是上線後的真實前測紀錄，不是回測重算。GitHub runner 每次都是乾淨環境，所以腳本會先從已部署的網站（`SITE_URL`）和快取取回舊紀錄再合併。
 
