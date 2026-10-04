@@ -104,9 +104,9 @@ def run(f: pd.DataFrame, cfg: Config, risk: float = 0.01, fee: float = 0.0005,
                     "stop": round(pos["stop"], 2), "tp1": round(pos["tp1"], 2), "tp2": round(pos["tp2"], 2),
                     "tp1_hit": pos["tp1_hit"], "entry_time": int(idx[pos["i"]].timestamp()),
                     "bars": n - 1 - pos["i"], "r_now": round(pos["side"] * (c[-1] - pos["entry"]) / pos["R"], 2)}
-    elif pending:
-        open_pos = {"pending": True, "side": "long" if pending[0] == 1 else "short"}
-    return {"equity": equity_curve, "trades": trades, "open": open_pos,
+    # bars at the end of the data during which a new signal would still be ignored
+    cooldown_left = max(0, cooldown_until - (n - 1)) if pos is None else 0
+    return {"equity": equity_curve, "trades": trades, "open": open_pos, "cooldown_left": cooldown_left,
             "metrics": metrics(equity_curve, trades, f)}
 
 

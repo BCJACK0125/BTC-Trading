@@ -2,6 +2,7 @@
   "use strict";
   const D = window.BTC_DATA;
   const R = window.BTC_RESEARCH;
+  const H = Array.isArray(window.BTC_HISTORY) ? window.BTC_HISTORY : [];
   const $ = (id) => document.getElementById(id);
   const root = document.documentElement;
 
@@ -45,7 +46,7 @@
     return;
   }
 
-  const S = D.signal, P = D.plan, POS = D.position && !D.position.pending ? D.position : null;
+  const S = D.signal, P = D.plan, POS = D.position || null;
   const cfg = D.strategy;
   let live = null;
 
@@ -138,6 +139,8 @@
       sub = `系統 ${dateStr(POS.entry_time - D.chart.bar_seconds)} 進場，已持有 ${POS.bars} 根 K 線，目前 ${sgn(POS.r_now, 2, "R")}。`;
     } else if (S.action === "ENTER_LONG") {
       sub = "訊號成立：下一根 4h K 線開盤進場" + (P.pullback_entry ? `，或掛單在回測支撐 ${fmt(P.pullback_entry)} 附近。` : "。");
+    } else if (S.action === "COOLDOWN") {
+      sub = "分數已達門檻，但仍在出場後的冷卻期。以下是冷卻結束後若條件仍成立的參考價位。";
     } else {
       sub = "目前沒有訊號。以下是「如果此刻條件成立」的參考價位，不是進場建議。";
     }
@@ -277,13 +280,70 @@
       aria-label="${y.year} 年 策略 ${sgn(y.strategy, 1)}，買入持有 ${sgn(y.buy_hold, 1)}">${bar(y.strategy, "s")}${bar(y.buy_hold, "h")}</div></div>`).join("");
   }
 
+  // ---- forward signal log ---------------------------------------------------------
+  const TONE = { ENTER_LONG: "go", IN_POSITION: "hold", WATCH: "watch", COOLDOWN: "watch" };
+  const REASON = { stop: "止損", breakeven: "保本出場", trail: "移動停損", target: "止盈", time: "時間到" };
+
+  function renderHistory() {
+    if (!H.length) {
+      $("hist-lede").textContent = "尚無紀錄。每次自動更新都會把當時發布的訊號記在這裡，累積成真實的前測紀錄。";
+      return;
+    }
+    const bar = D.chart.bar_seconds;
+    const expected = Math.round((H[H.length - 1].bar - H[0].bar) / bar) + 1;
+    const missing = Math.max(0, expected - H.length);
+    const entries = H.filter((e) => e.action === "ENTER_LONG").length;
+    $("hist-stats").textContent = `${H.length} 次更新・${entries} 次進場訊號` + (missing ? `・缺漏 ${missing} 根` : "");
+    $("hist-lede").textContent = `自 ${dateStr(H[0].bar)} 起，每根 4h K 線收盤後頁面實際發布的狀態（不是事後用回測重算）。` +
+      "下表只列出狀態改變或有交易出場的時點，最新在上。回測是規則的歷史模擬，這裡才是上線後的真實紀錄。";
+    const shown = H.filter((e, i) => i === 0 || e.action !== H[i - 1].action || e.closed).slice(-30).reverse();
+    $("hist-table").innerHTML = `<thead><tr><th>K 線收盤</th><th>狀態</th><th>分數</th><th>價格</th><th>止損</th><th>TP1</th><th>交易出場</th></tr></thead><tbody>` +
+      shown.map((e) => `<tr><td>${dateStr(e.bar)}</td><td><span class="tag ${TONE[e.action] || ""}">${e.label}</span></td>
+        <td>${fmt(e.score, 1)}</td><td>${fmt(e.price)}</td><td>${fmt(e.stop)}</td><td>${fmt(e.tp1)}</td>
+        <td>${e.closed ? `<span class="${cls(e.closed.r)}">${sgn(e.closed.r, 2, "R")}</span>（${REASON[e.closed.reason] || e.closed.reason}）` : ""}</td></tr>`).join("") +
+      "</tbody>";
+  }
+
+  const W_NAME = { base: "基本", no_location: "不含位置", sentiment: "含情緒" };
+  const X_NAME = { fixed_2R: "固定 2R", partial: "1.5R + 3R", trail: "1.5R + 移動停損" };
+  const paramText = (t) => [t.tf, `swing ${t.swing_len}`, W_NAME[t.weights] || t.weights, `門檻 ${t.threshold}`,
+    t.sides === "long_only" ? "只做多" : "多空", X_NAME[t.exit] || t.exit, t.sl_mode === "atr" ? "ATR 止損" : "結構止損"].join("・");
+
+  function renderRobust() {
+    const rb = R?.robustness;
+    if (!rb?.deflated) { $("robust").hidden = true; return; }
+    const ds = rb.deflated, mc = rb.monte_carlo || {}, wf = rb.walk_forward || {};
+    const kpi = (v, k, c, tone = "") => `<div class="kpi"><div class="v ${tone}">${v}</div><div class="k">${k}</div><div class="c">${c}</div></div>`;
+    $("rob-kpis").innerHTML =
+      kpi(fmt(ds.psr_oos, 1) + "%", "樣本外 PSR", "參數事先固定，樣本外真實 Sharpe > 0 的機率", ds.psr_oos >= 95 ? "pos-t" : "warn-t") +
+      kpi(fmt(ds.dsr, 1) + "%", "Deflated Sharpe", `扣掉挑選 ${ds.n_trials} 組的運氣後，樣本內 Sharpe 仍顯著的機率`, ds.dsr >= 95 ? "pos-t" : "warn-t") +
+      (mc.max_dd_p5 != null ? kpi(fmt(mc.max_dd_p5, 1) + "%", "蒙地卡羅最差 5% 回撤", `中位 ${fmt(mc.max_dd_p50, 1)}%，實際 ${fmt(mc.actual_trade_dd_pct, 1)}%（逐筆）`) : "") +
+      (wf.stitched ? kpi(fmt(wf.stitched.sharpe, 2), "Walk-forward Sharpe", `年化 ${sgn(wf.stitched.cagr_pct, 1)}，最大回撤 ${fmt(wf.stitched.max_dd_pct, 1)}%`) : "");
+    $("rob-note").textContent =
+      `挑過 ${ds.n_trials} 組參數，最好的那組就算毫無真本事，樣本內 Sharpe 也預期能到 ${fmt(ds.benchmark_sharpe, 2)}；` +
+      `採用的設定是 ${fmt(ds.is_sharpe, 2)}，Deflated Sharpe ${fmt(ds.dsr, 1)}%` +
+      (ds.dsr >= 95 ? "，超過 95% 的顯著門檻。" : "，未達 95% 的顯著門檻，單看樣本內不足以排除運氣。") +
+      `不過這 ${ds.n_trials} 組彼此高度相關（多半只差門檻或權重），當成獨立試驗是最嚴格的算法。` +
+      `比較乾淨的證據是樣本外：參數在 2023 年底就固定，之後的 PSR 為 ${fmt(ds.psr_oos, 1)}%。` +
+      (mc.n_sims ? `蒙地卡羅把 ${mc.n_trades} 筆交易的順序重抽 ${fmt(mc.n_sims)} 次，年化報酬 5%～95% 區間為 ${sgn(mc.cagr_p5, 1)} 到 ${sgn(mc.cagr_p95, 1)}，虧損機率 ${fmt(mc.prob_loss_pct, 1)}%。` : "");
+
+    if (!wf.years) { $("wf-lede").textContent = ""; return; }
+    $("wf-lede").textContent = `每年年初只用之前的資料、用同一套規則重新挑參數，然後實際交易一年，再把各年接起來（${wf.period}）。` +
+      `這測的是「挑參數的方法」本身，而不只是某一組參數：接起來的年化 ${sgn(wf.stitched.cagr_pct, 1)}、Sharpe ${fmt(wf.stitched.sharpe, 2)}；` +
+      `同期間固定用目前參數為 ${sgn(wf.prod.cagr_pct, 1)}／${fmt(wf.prod.sharpe, 2)}，買入持有 ${sgn(wf.buy_hold.cagr_pct, 1)}／${fmt(wf.buy_hold.sharpe, 2)}（最大回撤 ${fmt(wf.buy_hold.max_dd_pct, 0)}%）。`;
+    $("wf-table").innerHTML = `<caption class="note" style="caption-side:bottom;text-align:left;padding-top:8px">* 目前參數是用 2019–2023 挑出的，2024 年以前屬於樣本內，僅供對照。</caption><thead><tr><th>測試年</th><th>訓練資料</th><th>當年選出的參數</th><th>報酬</th><th>Sharpe</th><th>最大回撤</th><th>目前參數</th><th>買入持有</th></tr></thead><tbody>` +
+      wf.years.map((y) => `<tr><td>${y.year}${y.partial ? "（至今）" : ""}</td><td>${y.train}</td><td>${paramText(y.params)}</td>
+        <td class="${cls(y.return_pct)}">${sgn(y.return_pct, 1)}</td><td>${fmt(y.sharpe, 2)}</td><td>${fmt(y.max_dd_pct, 1)}%</td>
+        <td class="${cls(y.prod_return_pct)}">${sgn(y.prod_return_pct, 1)}${y.year < 2024 ? "*" : ""}</td><td class="${cls(y.buy_hold_pct)}">${sgn(y.buy_hold_pct, 1)}</td></tr>`).join("") +
+      "</tbody>";
+  }
+
   function renderResearch() {
-    if (!R) { $("res-lede").textContent = "找不到研究資料（docs/data/research.js），請執行 python scripts/research.py。"; return; }
+    if (!R) { $("res-lede").textContent = "找不到研究資料（docs/data/research.js），請執行 python scripts/research.py。"; $("robust").hidden = true; return; }
     $("res-lede").textContent = `共測試 ${R.n_configs} 組參數（週期、swing 長度、權重、門檻、多空方向、出場方式、止損方式），` +
       `只用 ${R.is_period} 的資料挑選。樣本內前 20 名在 ${R.oos_period} 有 ${R.oos_share_profitable_top20}% 仍然獲利，` +
       `樣本外 Sharpe 中位數 ${R.oos_median_sharpe_top20}；全部 ${R.n_configs} 組裡則有 ${R.oos_share_profitable_all}% 樣本外獲利。下表是樣本內排名前 10 名，第一列是目前採用的設定。`;
-    const wName = { base: "基本", no_location: "不含位置", sentiment: "含情緒" };
-    const xName = { fixed_2R: "固定 2R", partial: "1.5R + 3R", trail: "1.5R + 移動停損" };
+    const wName = W_NAME, xName = X_NAME;
     $("research-table").innerHTML = `<thead><tr><th>週期</th><th>Swing</th><th>權重</th><th>門檻</th><th>方向</th><th>出場</th><th>止損</th>
       <th>樣本內 Sharpe</th><th>樣本外 Sharpe</th><th>樣本外交易</th><th>樣本外 PF</th><th>樣本外回撤</th></tr></thead><tbody>` +
       R.top.slice(0, 10).map((t, i) => `<tr${i === 0 ? ' style="font-weight:700"' : ""}><td>${t.tf}</td><td>${t.swing_len}</td><td>${wName[t.weights] || t.weights}</td>
@@ -474,6 +534,8 @@
   renderTF();
   renderBacktest();
   renderResearch();
+  renderRobust();
+  renderHistory();
   drawCharts();
   poll();
   setInterval(poll, 15000);

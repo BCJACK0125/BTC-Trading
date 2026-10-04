@@ -84,6 +84,15 @@
     </div>
   </section>
 
+  <section class="block" aria-labelledby="hist-title">
+    <div class="block-head">
+      <h2 id="hist-title">訊號紀錄</h2>
+      <span class="legend" id="hist-stats"></span>
+    </div>
+    <p class="lede" id="hist-lede"></p>
+    <div class="scroll-x"><table class="trades" id="hist-table"></table></div>
+  </section>
+
   <section class="block" aria-labelledby="bt-title">
     <h2 id="bt-title">回測證據</h2>
     <p class="lede" id="bt-lede"></p>
@@ -125,6 +134,14 @@
     <h2 id="res-title">參數研究</h2>
     <p class="lede" id="res-lede"></p>
     <div class="scroll-x"><table class="trades" id="research-table"></table></div>
+    <div id="robust">
+      <h3>過度擬合檢驗</h3>
+      <div class="kpis" id="rob-kpis"></div>
+      <p class="note" id="rob-note"></p>
+      <h3>Walk-forward：每年只用當時之前的資料重新挑參數</h3>
+      <p class="lede" id="wf-lede"></p>
+      <div class="scroll-x"><table class="trades" id="wf-table"></table></div>
+    </div>
   </section>
 
   <section class="block method">
@@ -155,6 +172,7 @@
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <script src="data/latest.js"></script>
 <script src="data/research.js"></script>
+<script src="data/history.js"></script>
 <script src="assets/app.js"></script>
 </body>
 </html>

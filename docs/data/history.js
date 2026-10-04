@@ -1,0 +1,1 @@
+window.BTC_HISTORY=[{"bar":1791115200,"generated":"2026-10-04T14:54:26+00:00","action":"COOLDOWN","label":"冷卻中","score":62.5,"price":85309.46,"stop":84016.35,"tp1":87249.13,"closed":{"entry":84540.92,"exit":85292.4,"r":0.357,"reason":"time"}}];

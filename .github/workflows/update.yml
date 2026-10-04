@@ -42,7 +42,17 @@ jobs:
           key: klines-${{ github.run_id }}
           restore-keys: klines-
 
+      - id: pages
+        uses: actions/configure-pages@v5
+
       - name: Compute signal
+        env:
+          # previous signal log is recovered from the live site before appending
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+          # optional push notifications on signal changes (Settings > Secrets and variables > Actions)
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python scripts/update.py
 
       - uses: actions/upload-pages-artifact@v3

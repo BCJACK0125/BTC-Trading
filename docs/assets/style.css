@@ -224,6 +224,14 @@ thead th { color: var(--muted); font-weight: 500; font-size: .8rem; }
 .yr-row .b.l { border-radius: 3px 0 0 3px; }
 .yr-row .t { position: absolute; top: -3px; font-size: .7rem; color: var(--ink-2); line-height: 16px; white-space: nowrap; }
 
+.tag { display: inline-block; font-weight: 700; padding: 0 8px; border-radius: 999px; font-size: .8rem; line-height: 1.6;
+  background: var(--sunk); color: var(--ink-2); }
+.tag.go { background: color-mix(in srgb, var(--up) 16%, transparent); color: var(--up); }
+.tag.hold { background: color-mix(in srgb, var(--hold) 16%, transparent); color: var(--hold); }
+.tag.watch { background: color-mix(in srgb, var(--watch) 16%, transparent); color: var(--watch); }
+.kpi .v.pos-t { color: var(--up); }
+.kpi .v.warn-t { color: var(--watch); }
+
 .scroll-x, .two-col > div, .bt-grid > div { overflow-x: auto; min-width: 0; }
 .trades td, .trades th { font-size: .84rem; }
 

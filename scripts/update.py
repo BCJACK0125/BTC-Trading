@@ -1,13 +1,17 @@
-"""Fetch data, compute the live signal + backtest, write docs/data/latest.json.
+"""Fetch data, compute the live signal + backtest, write docs/data/latest.json
+and append to the forward signal log docs/data/history.json.
 
     python scripts/update.py [--cache data/cache]
 
 Runs in GitHub Actions after every 4h candle close (see .github/workflows).
+Environment (all optional): SITE_URL (deployed dashboard, used to recover the
+signal log), TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID, DISCORD_WEBHOOK_URL.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -17,7 +21,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from btc_signal import data, signals, backtest  # noqa: E402
+from btc_signal import data, signals, backtest, history, notify  # noqa: E402
 from btc_signal.signals import Config, FACTORS, FACTOR_LABELS  # noqa: E402
 
 OUT = ROOT / "docs" / "data" / "latest.json"
@@ -65,12 +69,18 @@ def factor_details(row: pd.Series, cfg: Config) -> list[dict]:
     return out
 
 
-def decide(row: pd.Series, cfg: Config, open_pos: dict | None) -> dict:
+def decide(row: pd.Series, cfg: Config, open_pos: dict | None, cooldown_left: int = 0,
+           bar_hours: int = 4) -> dict:
+    """Mirror exactly what the backtest would do at the next bar open."""
     s = float(row["score"])
     htf = row["htf_trend"]
-    if open_pos and not open_pos.get("pending"):
+    if open_pos:
         return {"action": "IN_POSITION", "label": "持倉中", "tone": "hold",
                 "summary": "系統已在一筆多單中，依移動停損管理；若你尚未進場，屬於追價，建議等下一次訊號或回測支撐區。"}
+    if row["signal"] == 1 and cooldown_left > 0:
+        return {"action": "COOLDOWN", "label": "冷卻中", "tone": "watch",
+                "summary": f"分數 {s:.0f} 已達門檻，但上一筆交易剛出場。規則要求出場後等 {cfg.cooldown} 根 K 線，"
+                           f"還剩 {cooldown_left} 根（約 {cooldown_left * bar_hours} 小時）；屆時條件仍成立才進場。"}
     if row["signal"] == 1:
         return {"action": "ENTER_LONG", "label": "進場做多", "tone": "go",
                 "summary": f"分數 {s:.0f} ≥ 門檻 {cfg.threshold:.0f} 且日線趨勢向上，條件成立。"}
@@ -138,13 +148,14 @@ def main():
 
     bt = backtest.run(f, cfg)
     row = f.iloc[-1]
-    decision = decide(row, cfg, bt["open"])
+    bar_hours = data.INTERVAL_MS[tf] // 3_600_000
+    decision = decide(row, cfg, bt["open"], bt["cooldown_left"], bar_hours)
     plan = signals.trade_plan(row, 1, cfg)
     plan = {k: (r2(v) if isinstance(v, (float, int)) and not isinstance(v, bool) else v) for k, v in plan.items()}
-    plan["tp1_note"] = f"到價先平 50%，停損移到進場價"
+    plan["tp1_note"] = "到價先平 50%，停損移到進場價"
     plan["trail_note"] = (f"剩餘 50% 用移動停損：最高價 − {cfg.trail_atr:g}×ATR（目前約 "
                           f"{cfg.trail_atr * row['atr']:,.0f} USDT）") if cfg.exit_mode == "trail" else None
-    plan["time_stop_note"] = f"持有超過 {cfg.max_bars} 根 {tf} K 線（約 {cfg.max_bars * 4 // 24 if tf == '4h' else cfg.max_bars // 24} 天）未出場則平倉"
+    plan["time_stop_note"] = f"持有超過 {cfg.max_bars} 根 {tf} K 線（約 {cfg.max_bars * bar_hours / 24:g} 天）未出場則平倉"
 
     risk_table = []
     for risk in (0.005, 0.01, 0.02, 0.03):
@@ -213,6 +224,60 @@ def main():
     # same data as a script so docs/index.html also works when opened from disk (file://)
     OUT.with_suffix(".js").write_text(f"window.BTC_DATA={payload};", encoding="utf-8")
     print(f"wrote {OUT.relative_to(ROOT)}: {decision['action']} score={row['score']:.1f} price={row['close']:.2f}")
+
+    update_history(out, bt["trades"], Path(args.cache), os.environ.get("SITE_URL", ""))
+
+
+def history_entry(out: dict, trades: list[dict]) -> dict:
+    pos = out["position"]
+    e = {"bar": out["last_bar_close"], "generated": out["generated_at"], "action": out["signal"]["action"],
+         "label": out["signal"]["label"], "score": out["signal"]["score"], "price": out["price"],
+         "stop": pos["stop"] if pos else out["plan"]["stop"], "tp1": pos["tp1"] if pos else out["plan"]["tp1"]}
+    closed = [t for t in trades if t["exit_time"] == out["last_bar_close"]]
+    if closed:
+        e["closed"] = {k: closed[-1][k] for k in ("entry", "exit", "r", "reason")}
+    return e
+
+
+REASON = {"stop": "止損", "breakeven": "保本出場", "trail": "移動停損", "target": "止盈", "time": "時間到"}
+
+
+def notify_text(out: dict, e: dict, prev: dict | None, site_url: str) -> str:
+    t = pd.Timestamp(e["bar"], unit="s", tz="UTC").strftime("%Y-%m-%d %H:%M UTC")
+    lines = [f"BTC 訊號台｜{e['label']}",
+             f"{out['timeframe']} 收盤 {t}，價格 {e['price']:,.0f}，分數 {e['score']:.1f}"
+             + (f"（前一根：{prev['label']}）" if prev else "")]
+    if e["action"] == "ENTER_LONG":
+        p = out["plan"]
+        lines.append(f"下一根開盤做多。止損 {p['stop']:,.0f}（-{p['risk_pct']:.2f}%），TP1 {p['tp1']:,.0f} 平一半")
+    elif e["action"] == "IN_POSITION":
+        lines.append(f"持倉止損 {e['stop']:,.0f}，TP1 {e['tp1']:,.0f}")
+    if e.get("closed"):
+        c = e["closed"]
+        lines.append(f"上一筆交易出場：{c['r']:+.2f}R（{REASON.get(c['reason'], c['reason'])}，"
+                     f"{c['entry']:,.0f} → {c['exit']:,.0f}）")
+    lines.append(out["signal"]["summary"])
+    if site_url:
+        lines.append(site_url)
+    return "\n".join(lines)
+
+
+def update_history(out: dict, trades: list[dict], cache: Path, site_url: str):
+    """Merge the forward signal log from the deployed site, the cache and the repo, then
+    append this bar. Sends a notification when the action changed since the last bar."""
+    local = OUT.with_name("history.json")
+    remote = history.read_url(site_url.rstrip("/") + "/data/history.json") if site_url else []
+    hist = history.merge(remote, history.read_file(cache / "history.json"), history.read_file(local))
+    e = history_entry(out, trades)
+    hist, prev, changed = history.record(hist, e)
+    payload = json.dumps(hist, ensure_ascii=False, separators=(",", ":"), default=_json_default)
+    for path in (local, cache / "history.json"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(payload, encoding="utf-8")
+    local.with_suffix(".js").write_text(f"window.BTC_HISTORY={payload};", encoding="utf-8")
+    print(f"history: {len(hist)} entries ({len(remote)} from site)" + (f", changed from {prev['action']}" if changed else ""))
+    if changed and notify.channels():
+        print("notified:", notify.send(notify_text(out, e, prev, site_url)) or "failed")
 
 
 def _json_default(o):
