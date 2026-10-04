@@ -1,0 +1,31 @@
+{
+  "timeframe": "4h",
+  "weights_name": "sentiment",
+  "exit_name": "trail",
+  "config": {
+    "swing_len": 5,
+    "weights": {
+      "htf_trend": 25,
+      "trend": 15,
+      "structure": 20,
+      "momentum": 10,
+      "location": 10,
+      "strength": 10,
+      "sentiment": 10
+    },
+    "threshold": 40.0,
+    "sides": "long_only",
+    "require_htf": true,
+    "sl_mode": "atr",
+    "sl_atr": 2.0,
+    "sl_min_atr": 1.0,
+    "sl_max_atr": 3.0,
+    "exit_mode": "trail",
+    "tp1_r": 1.5,
+    "tp2_r": 3.0,
+    "trail_atr": 3.0,
+    "max_bars": 60,
+    "cooldown": 3
+  },
+  "selected_on": "2019-01-01 ~ 2023-12-31"
+}

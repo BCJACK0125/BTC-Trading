@@ -1,0 +1,60 @@
+name: Update signal & deploy dashboard
+
+on:
+  schedule:
+    # 7 minutes after every 4h candle close (UTC). GitHub may start scheduled runs a few minutes late.
+    - cron: "7 0,4,8,12,16,20 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["btc_signal/**", "scripts/**", "docs/**", "config/**", "requirements.txt", ".github/workflows/update.yml"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt pytest
+
+      - name: Tests
+        run: python -m pytest -q tests
+
+      # Incremental kline cache: each run restores the newest cache and only fetches new bars.
+      - uses: actions/cache@v4
+        with:
+          path: data/cache
+          key: klines-${{ github.run_id }}
+          restore-keys: klines-
+
+      - name: Compute signal
+        run: python scripts/update.py
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

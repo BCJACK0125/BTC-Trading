@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BTC 訊號台</title>
+<meta name="description" content="BTCUSDT 4 小時多因子 + SMC 共振訊號：是否進場、止損止盈位置與回測證據。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">BTC 訊號台</div>
+  <div class="ticker">
+    <span class="sym" id="sym">BINANCE:BTCUSDT</span>
+    <span class="live" id="live-price" aria-live="polite">—</span>
+    <span class="live-src" id="live-src"></span>
+  </div>
+  <div class="fresh" id="freshness"></div>
+  <button class="theme-btn" id="theme-btn" type="button" aria-label="切換深色或淺色主題">切換主題</button>
+</header>
+
+<main>
+  <section class="hero" aria-labelledby="verdict">
+    <div class="verdict-col">
+      <p class="context-line" id="context-line"></p>
+      <h1 class="verdict" id="verdict">載入中</h1>
+      <p class="summary" id="summary"></p>
+
+      <div class="ruler" id="ruler" role="img">
+        <div class="ruler-track">
+          <div class="ruler-zone" id="ruler-zone"></div>
+          <div class="ruler-mid"></div>
+          <div class="ruler-thr" id="ruler-thr"></div>
+          <div class="ruler-needle" id="ruler-needle"><span id="ruler-value"></span></div>
+        </div>
+        <div class="ruler-scale"><span>-100 偏空</span><span>0</span><span>+100 偏多</span></div>
+      </div>
+      <p class="ruler-note" id="ruler-note"></p>
+    </div>
+
+    <aside class="ticket" aria-labelledby="ticket-title">
+      <h2 id="ticket-title">交易計畫</h2>
+      <p class="ticket-sub" id="ticket-sub"></p>
+      <div class="ladder" id="ladder"></div>
+      <ul class="rules" id="rules"></ul>
+      <details class="calc" open>
+        <summary>倉位計算</summary>
+        <div class="calc-grid">
+          <label>帳戶資金 (USDT)<input id="acct" type="number" min="0" step="100" inputmode="decimal"></label>
+          <label>單筆風險 %<input id="riskpct" type="number" min="0.1" max="10" step="0.1" inputmode="decimal"></label>
+        </div>
+        <dl class="calc-out" id="calc-out"></dl>
+      </details>
+    </aside>
+  </section>
+
+  <section class="block" aria-labelledby="chart-title">
+    <div class="block-head">
+      <h2 id="chart-title">4 小時 K 線與結構</h2>
+      <div class="chart-controls">
+        <span class="legend" id="chart-legend"></span>
+        <label class="toggle"><input type="checkbox" id="tg-zones" checked> OB / FVG 區</label>
+        <label class="toggle"><input type="checkbox" id="tg-trades" checked> 歷史交易</label>
+      </div>
+    </div>
+    <div class="chart" id="price-chart" aria-label="BTCUSDT 4 小時 K 線圖"></div>
+    <p class="caption">下方柱狀為共振分數（綠＝偏多、紅＝偏空）。虛線為目前有效的 Order Block，點線為未回補的 FVG；▲▼ 是回測中的進出場。</p>
+  </section>
+
+  <section class="block two-col">
+    <div>
+      <h2>分數怎麼來</h2>
+      <p class="lede">每個因子介於 -1 到 +1，乘上權重後加總就是分數。條形向右代表支持做多。</p>
+      <div class="factors" id="factors"></div>
+    </div>
+    <div>
+      <h2>多週期與市場情緒</h2>
+      <table class="tf-table" id="tf-table"></table>
+      <p class="note">策略只用 4h 下單。1h 在研究中訊號雜訊大（中位 Sharpe 0.08），加入 1h 確認也沒有改善結果，因此僅供參考。</p>
+      <dl class="ctx" id="ctx"></dl>
+    </div>
+  </section>
+
+  <section class="block" aria-labelledby="bt-title">
+    <h2 id="bt-title">回測證據</h2>
+    <p class="lede" id="bt-lede"></p>
+    <div class="kpis" id="kpis"></div>
+    <div class="bt-grid">
+      <div>
+        <div class="block-head">
+          <h3>資金曲線（對數刻度）</h3>
+          <span class="legend" id="eq-legend"></span>
+        </div>
+        <div class="chart small" id="equity-chart" aria-label="策略與買入持有的資金曲線"></div>
+      </div>
+      <div>
+        <h3>樣本內 / 樣本外</h3>
+        <table class="stats" id="stats-table"></table>
+      </div>
+    </div>
+    <div class="bt-grid three">
+      <div>
+        <div class="block-head"><h3>逐年報酬</h3><span class="legend" id="yr-legend"></span></div>
+        <div class="years" id="years"></div>
+      </div>
+      <div>
+        <h3>每筆風險與報酬</h3>
+        <table class="stats" id="risk-table"></table>
+        <p class="note">Sharpe 幾乎不隨風險改變；放大風險只是同比例放大報酬和回撤。</p>
+      </div>
+      <div>
+        <h3>進場分數與結果</h3>
+        <table class="stats" id="bucket-table"></table>
+        <p class="note">分數高不等於更好：高分常出現在行情已走一段之後。分數是「條件是否成立」，不是勝率。</p>
+      </div>
+    </div>
+    <h3>最近交易</h3>
+    <div class="scroll-x"><table class="trades" id="trades-table"></table></div>
+  </section>
+
+  <section class="block" aria-labelledby="res-title">
+    <h2 id="res-title">參數研究</h2>
+    <p class="lede" id="res-lede"></p>
+    <div class="scroll-x"><table class="trades" id="research-table"></table></div>
+  </section>
+
+  <section class="block method">
+    <h2>方法與限制</h2>
+    <div class="method-cols">
+      <div>
+        <h3>訊號</h3>
+        <p id="m-signal"></p>
+        <h3>止損與止盈</h3>
+        <p id="m-exit"></p>
+      </div>
+      <div>
+        <h3>資料</h3>
+        <p>K 線來自 Binance 公開行情 API（OKX 備援），恐懼貪婪指數來自 alternative.me，資金費率來自 Binance／OKX 永續合約。數值已與 TradingView 上的 BINANCE:BTCUSDT 核對一致。</p>
+        <h3>更新</h3>
+        <p>GitHub Actions 在每根 4h K 線收盤後約 10 分鐘執行（UTC 0、4、8、12、16、20 點）。頁面上的即時價格每 15 秒直接向交易所查詢。</p>
+      </div>
+      <div>
+        <h3>限制</h3>
+        <p>回測含手續費 0.05% 與滑價 0.02%，同一根 K 線同時碰到止損與止盈時假設先止損。只做多的策略在牛市大幅落後買入持有，優勢在於避開熊市與控制回撤。即使樣本外表現穩定，過去績效不代表未來。本頁不是投資建議。</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot" id="foot"></footer>
+
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script src="data/latest.js"></script>
+<script src="data/research.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>

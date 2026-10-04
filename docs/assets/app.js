@@ -1,0 +1,482 @@
+(() => {
+  "use strict";
+  const D = window.BTC_DATA;
+  const R = window.BTC_RESEARCH;
+  const $ = (id) => document.getElementById(id);
+  const root = document.documentElement;
+
+  const fmt = (v, d = 0) => (v == null || Number.isNaN(v)) ? "—"
+    : Number(v).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  const sgn = (v, d = 1, unit = "%") => v == null ? "—" : (v > 0 ? "+" : "") + fmt(v, d) + unit;
+  const cls = (v) => v > 0 ? "pos-t" : v < 0 ? "neg-t" : "";
+  const cssVar = (n) => getComputedStyle(root).getPropertyValue(n).trim();
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage blocked */ } },
+  };
+  const dateStr = (sec, withTime = true) => {
+    const d = new Date(sec * 1000);
+    const p = (n) => String(n).padStart(2, "0");
+    const s = `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())}`;
+    return withTime ? `${s} ${p(d.getHours())}:${p(d.getMinutes())}` : s;
+  };
+  const ago = (sec) => {
+    const m = Math.round((Date.now() / 1000 - sec) / 60);
+    if (m < 60) return `${m} 分鐘前`;
+    const h = Math.floor(m / 60);
+    return h < 48 ? `${h} 小時 ${m % 60} 分前` : `${Math.floor(h / 24)} 天前`;
+  };
+
+  // ---- theme ---------------------------------------------------------------
+  const savedTheme = store.get("theme", null);
+  if (savedTheme) root.dataset.theme = savedTheme;
+  $("theme-btn").addEventListener("click", () => {
+    const dark = root.dataset.theme ? root.dataset.theme === "dark"
+      : matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = dark ? "light" : "dark";
+    store.set("theme", root.dataset.theme);
+    drawCharts();
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if (!root.dataset.theme) drawCharts(); });
+
+  if (!D) {
+    $("verdict").textContent = "沒有資料";
+    $("summary").textContent = "找不到 data/latest.js。請先執行 python scripts/update.py 產生資料，再重新整理。";
+    return;
+  }
+
+  const S = D.signal, P = D.plan, POS = D.position && !D.position.pending ? D.position : null;
+  const cfg = D.strategy;
+  let live = null;
+
+  // ---- header & verdict ----------------------------------------------------
+  function renderFreshness() {
+    const next = D.last_bar_close + 4 * 3600 + 10 * 60;
+    const stale = Date.now() / 1000 > next + 35 * 60;
+    const el = $("freshness");
+    el.classList.toggle("stale", stale);
+    el.textContent = `訊號依據 ${dateStr(D.last_bar_close)} 收盤的 4h K 線（${ago(D.last_bar_close)}）` +
+      (stale ? "，資料已過期，請檢查 GitHub Actions" : `，下次更新約 ${dateStr(next)}`);
+  }
+
+  function renderVerdict() {
+    $("context-line").textContent = `BTCUSDT 4 小時策略，只做多，門檻 ${cfg.threshold} 分`;
+    const v = $("verdict");
+    v.textContent = S.label;
+    v.className = `verdict ${S.tone}`;
+    $("summary").textContent = S.summary;
+
+    const pos = (x) => `${(x + 100) / 2}%`;
+    $("ruler-zone").style.left = pos(cfg.threshold);
+    $("ruler-thr").style.left = pos(cfg.threshold);
+    $("ruler-thr").textContent = `進場門檻 ${cfg.threshold}`;
+    $("ruler-value").textContent = fmt(S.score, 1);
+    $("ruler").setAttribute("aria-label", `共振分數 ${fmt(S.score, 1)}，範圍 -100 到 100，進場門檻 ${cfg.threshold}`);
+    requestAnimationFrame(() => { $("ruler-needle").style.left = pos(Math.max(-100, Math.min(100, S.score))); });
+    $("ruler-needle").style.left = "50%";
+
+    const htf = D.timeframes["1d"];
+    $("ruler-note").textContent = S.action === "STAND_ASIDE"
+      ? "日線趨勢轉弱時，不論分數多高都不開新多單。"
+      : `日線收盤 ${fmt(htf.close)}，EMA200 在 ${fmt(htf.ema200)}；日線跌破 EMA200 時策略停止做多。`;
+  }
+
+  // ---- ticket: price ladder + rules + calculator ---------------------------
+  function levels() {
+    if (POS) {
+      const lv = [
+        { k: "entry", label: "持倉進場價", px: POS.entry },
+        { k: "stop", label: POS.tp1_hit ? "移動停損" : "止損", px: POS.stop },
+      ];
+      if (!POS.tp1_hit) lv.push({ k: "tp", label: "TP1 平一半", px: POS.tp1 });
+      lv.push({ k: "tp", label: "3R 參考", px: POS.tp2 });
+      return { entry: POS.entry, R: (POS.tp1 - POS.entry) / cfg.tp1_r, lv };
+    }
+    const lv = [
+      { k: "entry", label: "進場（收盤價）", px: P.entry },
+      { k: "stop", label: "止損", px: P.stop },
+      { k: "tp", label: `TP1 ${cfg.tp1_r}R 平一半`, px: P.tp1 },
+      { k: "tp", label: `${cfg.tp2_r}R 參考`, px: P.tp2 },
+    ];
+    if (P.pullback_entry) lv.push({ k: "pull", label: "回測支撐區", px: P.pullback_entry });
+    return { entry: P.entry, R: P.entry - P.stop, lv };
+  }
+
+  function renderTicket() {
+    const { entry, R, lv } = levels();
+    const now = live ?? D.price;
+    const ladder = $("ladder");
+    const H = ladder.clientHeight || 300;
+    const prices = [...lv.map((l) => l.px), now];
+    const lo = Math.min(...prices), hi = Math.max(...prices);
+    const pad = (hi - lo) * 0.08 || 1;
+    const y = (p) => ((hi + pad - p) / (hi - lo + 2 * pad)) * H;
+
+    const rungs = [...lv, { k: "now", label: live ? "即時價格" : "最新收盤", px: now }]
+      .map((l) => ({ ...l, y: y(l.px) })).sort((a, b) => a.y - b.y);
+    for (let i = 1; i < rungs.length; i++) {     // keep labels from colliding
+      if (rungs[i].y - rungs[i - 1].y < 26) rungs[i].y = rungs[i - 1].y + 26;
+    }
+    const overflow = rungs[rungs.length - 1].y - (H - 10);
+    if (overflow > 0) rungs.forEach((r) => { r.y -= overflow; });
+
+    const stop = lv.find((l) => l.k === "stop").px;
+    const top = Math.max(...lv.filter((l) => l.k === "tp").map((l) => l.px));
+    let html = `<div class="band risk" style="top:${y(entry)}px;height:${y(stop) - y(entry)}px"></div>` +
+      `<div class="band reward" style="top:${y(top)}px;height:${y(entry) - y(top)}px"></div>`;
+    for (const r of rungs) {
+      const d = r.k === "now" ? "" : `${sgn((r.px / now - 1) * 100, 2)}` + (R > 0 ? `　${sgn((r.px - entry) / R, 1, "R")}` : "");
+      html += `<div class="rung ${r.k}" style="top:${r.y}px"><span class="lbl">${r.label}</span>` +
+        `<span class="px">${fmt(r.px, 0)}</span><span class="dist">${r.k === "now" ? "" : d}</span></div>`;
+    }
+    ladder.innerHTML = html;
+    ladder.setAttribute("aria-label", rungs.map((r) => `${r.label} ${fmt(r.px)}`).join("，"));
+
+    // sub line + alerts
+    let sub;
+    if (POS) {
+      sub = `系統 ${dateStr(POS.entry_time - D.chart.bar_seconds)} 進場，已持有 ${POS.bars} 根 K 線，目前 ${sgn(POS.r_now, 2, "R")}。`;
+    } else if (S.action === "ENTER_LONG") {
+      sub = "訊號成立：下一根 4h K 線開盤進場" + (P.pullback_entry ? `，或掛單在回測支撐 ${fmt(P.pullback_entry)} 附近。` : "。");
+    } else {
+      sub = "目前沒有訊號。以下是「如果此刻條件成立」的參考價位，不是進場建議。";
+    }
+    const alerts = [];
+    if (live != null) {
+      if (live <= stop) alerts.push(`即時價格 ${fmt(live)} 已低於止損 ${fmt(stop)}。`);
+      const tp1 = lv.find((l) => l.label.startsWith("TP1"));
+      if (tp1 && live >= tp1.px) alerts.push(`即時價格已到 TP1 ${fmt(tp1.px)}，可先平一半並把止損移到進場價。`);
+    }
+    $("ticket-sub").innerHTML = sub + alerts.map((a) => `<div class="alert">${a}</div>`).join("");
+
+    const rules = [P.tp1_note && `TP1（${cfg.tp1_r}R）${P.tp1_note}`, P.trail_note, P.time_stop_note,
+      `止損距離 ${fmt(P.risk_pct, 2)}%（${cfg.sl_atr} 倍 ATR，ATR 約 ${fmt(P.atr)}）`];
+    if (P.liquidity_target) rules.push(`上方最近的空方區在 ${fmt(P.liquidity_target)}，可能形成壓力。`);
+    $("rules").innerHTML = rules.filter(Boolean).map((r) => `<li>${r}</li>`).join("");
+    renderCalc();
+  }
+
+  function renderCalc() {
+    const acct = parseFloat($("acct").value) || 0;
+    const rp = parseFloat($("riskpct").value) || 0;
+    store.set("calc", { acct, rp });
+    const entry = POS ? POS.entry : P.entry;
+    const stop = POS ? POS.stop : P.stop;
+    const dist = entry - stop;
+    const riskUsd = acct * rp / 100;
+    const size = dist > 0 ? riskUsd / dist : 0;
+    const notional = size * entry;
+    const rows = [
+      ["可承受虧損", `${fmt(riskUsd, 2)} USDT`],
+      ["倉位大小", `${fmt(size, 4)} BTC`],
+      ["名目價值", `${fmt(notional, 0)} USDT`],
+      ["需要槓桿", acct ? `${fmt(notional / acct, 2)} 倍` : "—"],
+      [`TP1 平一半獲利`, `${fmt(size / 2 * dist * cfg.tp1_r, 2)} USDT`],
+    ];
+    $("calc-out").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  }
+
+  const calcSaved = store.get("calc", { acct: 10000, rp: 1 });
+  $("acct").value = calcSaved.acct;
+  $("riskpct").value = calcSaved.rp;
+  $("acct").addEventListener("input", renderCalc);
+  $("riskpct").addEventListener("input", renderCalc);
+
+  // ---- factors / timeframes / context ----------------------------------------
+  function renderFactors() {
+    const total = S.factors.reduce((a, f) => a + f.weight, 0);
+    const maxC = Math.max(...S.factors.map((f) => f.weight / total * 100));
+    $("factors").innerHTML = S.factors.map((f) => {
+      const w = Math.abs(f.contribution) / maxC * 50;
+      return `<div class="factor"><div class="name">${f.label}<small>權重 ${f.weight}</small></div>
+        <div class="bar" role="img" aria-label="${f.label} 貢獻 ${sgn(f.contribution, 1, "")} 分">
+          <div class="fill ${f.contribution >= 0 ? "pos" : "neg"}" style="width:${w}%"></div></div>
+        <div class="val ${cls(f.contribution)}">${sgn(f.contribution, 1, "")}</div>
+        <div class="why">${f.detail}</div></div>`;
+    }).join("") + `<div class="factor-total"><span>合計分數</span><span>${fmt(S.score, 1)}</span></div>`;
+  }
+
+  function renderTF() {
+    const name = { "1h": "1 小時", "4h": "4 小時（下單）", "1d": "日線" };
+    const dir = (v, up, dn) => v > 0 ? `<span class="pos-t">${up}</span>` : v < 0 ? `<span class="neg-t">${dn}</span>` : "—";
+    $("tf-table").innerHTML = `<thead><tr><th>週期</th><th>分數</th><th>趨勢</th><th>結構</th><th>RSI</th><th>ADX</th><th>波段位置</th></tr></thead><tbody>` +
+      ["1h", "4h", "1d"].map((k) => {
+        const t = D.timeframes[k];
+        return `<tr><td>${name[k]}</td><td class="${cls(t.score)}">${fmt(t.score, 0)}</td><td>${dir(t.trend, "向上", "向下")}</td>
+          <td>${dir(t.structure, "多頭", "空頭")}</td><td>${fmt(t.rsi, 0)}</td><td>${fmt(t.adx, 0)}</td>
+          <td>${t.range_pos == null ? "—" : fmt(t.range_pos * 100, 0) + "%"}</td></tr>`;
+      }).join("") + "</tbody>";
+
+    const fg = D.context.fear_greed;
+    const fgLabel = fg == null ? "" : fg >= 75 ? "極度貪婪" : fg >= 55 ? "貪婪" : fg > 45 ? "中性" : fg > 25 ? "恐懼" : "極度恐懼";
+    const fr = D.context.funding;
+    const rows = [
+      ["恐懼貪婪指數", fg == null ? "無資料" : `${fg}（${fgLabel}）。策略把它當反向指標，貪婪時扣分。`],
+      ["資金費率", fr ? `${sgn(fr.rate * 100, 4)} / 8 小時（${fr.source}）。${fr.rate > 0.0003 ? "多方擁擠，留意回檔。" : fr.rate < 0 ? "空方付費，偏空情緒。" : "正常範圍。"}` : "無資料"],
+    ];
+    $("ctx").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  }
+
+  // ---- backtest ---------------------------------------------------------------
+  function renderBacktest() {
+    const B = D.backtest, oos = B.oos, is = B.is;
+    const bh = R?.baselines || {};
+    $("bt-lede").textContent = `${B.full.start} 到 ${B.full.end}，每筆交易風險 1% 資金，含手續費與滑價。` +
+      `參數只用 ${is.start}～${is.end} 挑選，${oos.start} 之後是沒看過的樣本外資料。`;
+    const kpi = (v, k, c) => `<div class="kpi"><div class="v">${v}</div><div class="k">${k}</div><div class="c">${c}</div></div>`;
+    $("kpis").innerHTML =
+      kpi(fmt(oos.sharpe, 2), "樣本外 Sharpe", `樣本內 ${fmt(is.sharpe, 2)}，買入持有 ${fmt(bh.buy_hold_oos?.sharpe, 2)}`) +
+      kpi(fmt(oos.win_rate_pct, 0) + "%", "樣本外勝率", `${oos.trades} 筆交易，平均 ${sgn(oos.avg_r, 2, "R")}`) +
+      kpi(fmt(oos.profit_factor, 2), "樣本外獲利因子", `總獲利 ÷ 總虧損，樣本內 ${fmt(is.profit_factor, 2)}`) +
+      kpi(fmt(oos.max_dd_pct, 1) + "%", "樣本外最大回撤", `買入持有 ${fmt(bh.buy_hold_oos?.max_dd_pct, 1)}%`);
+
+    const rows = [
+      ["總報酬", "total_return_pct", (v) => sgn(v, 1)], ["年化報酬", "cagr_pct", (v) => sgn(v, 1)],
+      ["最大回撤", "max_dd_pct", (v) => fmt(v, 1) + "%"], ["Sharpe", "sharpe", (v) => fmt(v, 2)],
+      ["交易次數", "trades", (v) => fmt(v)], ["勝率", "win_rate_pct", (v) => fmt(v, 1) + "%"],
+      ["獲利因子", "profit_factor", (v) => fmt(v, 2)], ["平均每筆", "avg_r", (v) => sgn(v, 2, "R")],
+      ["在場時間", "exposure_pct", (v) => fmt(v, 0) + "%"],
+    ];
+    const bhRow = (label, key, f) => `<tr><td>${label}</td><td>${f(bh.buy_hold_is?.[key])}</td><td>${f(bh.buy_hold_oos?.[key])}</td><td></td></tr>`;
+    $("stats-table").innerHTML = `<thead><tr><th></th><th>樣本內</th><th>樣本外</th><th>全期間</th></tr></thead><tbody>` +
+      rows.map(([l, k, f]) => `<tr><td>${l}</td><td>${f(is[k])}</td><td>${f(oos[k])}</td><td>${f(B.full[k])}</td></tr>`).join("") +
+      `<tr><td colspan="4" style="padding-top:14px;color:var(--muted)">對照：買入持有</td></tr>` +
+      bhRow("年化報酬", "cagr_pct", (v) => sgn(v, 1)) + bhRow("最大回撤", "max_dd_pct", (v) => fmt(v, 1) + "%") +
+      bhRow("Sharpe", "sharpe", (v) => fmt(v, 2)) + "</tbody>";
+
+    $("risk-table").innerHTML = `<thead><tr><th>每筆風險</th><th>年化</th><th>最大回撤</th><th>總報酬</th></tr></thead><tbody>` +
+      B.risk_table.map((r) => `<tr><td>${fmt(r.risk_pct, 1)}%</td><td>${sgn(r.cagr_pct, 1)}</td><td>${fmt(r.max_dd_pct, 1)}%</td><td>${sgn(r.total_return_pct, 0)}</td></tr>`).join("") + "</tbody>";
+
+    $("bucket-table").innerHTML = `<thead><tr><th>進場分數</th><th>筆數</th><th>勝率</th><th>平均</th></tr></thead><tbody>` +
+      B.score_buckets.map((b) => `<tr><td>${b.range}</td><td>${b.trades}</td><td>${fmt(b.win_rate, 0)}%</td><td class="${cls(b.avg_r)}">${sgn(b.avg_r, 2, "R")}</td></tr>`).join("") + "</tbody>";
+
+    const reason = { stop: "止損", breakeven: "保本出場", trail: "移動停損", target: "止盈", time: "時間到" };
+    $("trades-table").innerHTML = `<thead><tr><th>進場</th><th>出場</th><th>進場價</th><th>出場價</th><th>結果</th><th>資金變化</th><th>出場原因</th><th>持有</th></tr></thead><tbody>` +
+      B.recent_trades.map((t) => `<tr><td>${dateStr(t.entry_time - D.chart.bar_seconds)}</td><td>${dateStr(t.exit_time)}</td>
+        <td>${fmt(t.entry)}</td><td>${fmt(t.exit)}</td><td class="${cls(t.r)}">${sgn(t.r, 2, "R")}</td>
+        <td class="${cls(t.ret_pct)}">${sgn(t.ret_pct, 2)}</td><td>${reason[t.reason] || t.reason}</td><td>${Math.round(t.bars * 4 / 24 * 10) / 10} 天</td></tr>`).join("") + "</tbody>";
+
+    renderYears(B.yearly);
+  }
+
+  function renderYears(yearly) {
+    $("yr-legend").innerHTML = `<span><i style="background:var(--s1)"></i>策略</span><span><i style="background:var(--s2)"></i>買入持有</span>`;
+    const vals = yearly.flatMap((y) => [y.strategy, y.buy_hold]);
+    const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+    const span = (hi - lo) * 1.18 || 1;  // headroom on the right for the value label
+    const zero = (-lo / span) * 100;
+    const bar = (v, c) => {
+      const w = Math.abs(v) / span * 100;
+      const left = v >= 0 ? zero : zero - w;
+      // negative values are labelled just right of the zero line so they never run into the year column
+      const tx = v >= 0 ? `left:calc(${left + w}% + 4px)` : `left:calc(${zero}% + 4px)`;
+      return `<div class="yr-row" style="--zero:${zero}%"><div class="b ${c} ${v >= 0 ? "r" : "l"}" style="left:${left}%;width:${Math.max(w, 0.4)}%"></div>
+        <span class="t" style="${tx}">${sgn(v, 0)}</span></div>`;
+    };
+    $("years").innerHTML = yearly.map((y) => `<div class="yr"><span>${y.year}</span><div class="yr-bars" role="img"
+      aria-label="${y.year} 年 策略 ${sgn(y.strategy, 1)}，買入持有 ${sgn(y.buy_hold, 1)}">${bar(y.strategy, "s")}${bar(y.buy_hold, "h")}</div></div>`).join("");
+  }
+
+  function renderResearch() {
+    if (!R) { $("res-lede").textContent = "找不到研究資料（docs/data/research.js），請執行 python scripts/research.py。"; return; }
+    $("res-lede").textContent = `共測試 ${R.n_configs} 組參數（週期、swing 長度、權重、門檻、多空方向、出場方式、止損方式），` +
+      `只用 ${R.is_period} 的資料挑選。樣本內前 20 名在 ${R.oos_period} 有 ${R.oos_share_profitable_top20}% 仍然獲利，` +
+      `樣本外 Sharpe 中位數 ${R.oos_median_sharpe_top20}；全部 ${R.n_configs} 組裡則有 ${R.oos_share_profitable_all}% 樣本外獲利。下表是樣本內排名前 10 名，第一列是目前採用的設定。`;
+    const wName = { base: "基本", no_location: "不含位置", sentiment: "含情緒" };
+    const xName = { fixed_2R: "固定 2R", partial: "1.5R + 3R", trail: "1.5R + 移動停損" };
+    $("research-table").innerHTML = `<thead><tr><th>週期</th><th>Swing</th><th>權重</th><th>門檻</th><th>方向</th><th>出場</th><th>止損</th>
+      <th>樣本內 Sharpe</th><th>樣本外 Sharpe</th><th>樣本外交易</th><th>樣本外 PF</th><th>樣本外回撤</th></tr></thead><tbody>` +
+      R.top.slice(0, 10).map((t, i) => `<tr${i === 0 ? ' style="font-weight:700"' : ""}><td>${t.tf}</td><td>${t.swing_len}</td><td>${wName[t.weights] || t.weights}</td>
+        <td>${t.threshold}</td><td>${t.sides === "long_only" ? "只做多" : "多空"}</td><td>${xName[t.exit] || t.exit}</td><td>${t.sl_mode === "atr" ? "ATR" : "結構"}</td>
+        <td>${fmt(t.is_sharpe, 2)}</td><td class="${cls(t.oos_sharpe)}">${fmt(t.oos_sharpe, 2)}</td><td>${t.oos_trades}</td>
+        <td>${fmt(t.oos_profit_factor, 2)}</td><td>${fmt(t.oos_max_dd_pct, 1)}%</td></tr>`).join("") + "</tbody>";
+  }
+
+  // ---- charts -----------------------------------------------------------------
+  let priceChart, equityChart, candleSeries, markerSets = {}, zoneLines = [];
+
+  function chartBase(el, extra = {}) {
+    const LW = window.LightweightCharts;
+    return LW.createChart(el, {
+      autoSize: true,
+      layout: { background: { color: cssVar("--bg") }, textColor: cssVar("--ink-2"), fontFamily: cssVar("--sans"), fontSize: 12 },
+      grid: { vertLines: { color: "transparent" }, horzLines: { color: cssVar("--line") } },
+      rightPriceScale: { borderColor: cssVar("--line") },
+      timeScale: { borderColor: cssVar("--line"), timeVisible: true, secondsVisible: false },
+      crosshair: { mode: 0 },
+      localization: { locale: "zh-TW", priceFormatter: (p) => fmt(p, 0) },
+      ...extra,
+    });
+  }
+
+  function drawPrice() {
+    const el = $("price-chart");
+    el.innerHTML = "";
+    const C = D.chart, off = C.bar_seconds;
+    const up = cssVar("--up"), down = cssVar("--down");
+    priceChart = chartBase(el);
+    candleSeries = priceChart.addCandlestickSeries({
+      upColor: up, downColor: down, borderUpColor: up, borderDownColor: down, wickUpColor: up, wickDownColor: down,
+    });
+    candleSeries.priceScale().applyOptions({ scaleMargins: { top: 0.05, bottom: 0.24 } });
+    candleSeries.setData(C.candles.map(([t, o, h, l, c]) => ({ time: t, open: o, high: h, low: l, close: c })));
+
+    const emaColors = [cssVar("--s1"), cssVar("--s2"), cssVar("--s3")];
+    [["ema21", "EMA21"], ["ema55", "EMA55"], ["ema200", "EMA200"]].forEach(([k], i) => {
+      const s = priceChart.addLineSeries({ color: emaColors[i], lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+      s.setData(C[k].map((v, j) => v == null ? null : { time: C.candles[j][0], value: v }).filter(Boolean));
+    });
+    $("chart-legend").innerHTML = ["EMA21", "EMA55", "EMA200"].map((n, i) => `<span><i style="background:${emaColors[i]}"></i>${n}</span>`).join("") +
+      `<span id="ohlc-readout"></span>`;
+
+    const score = priceChart.addHistogramSeries({ priceScaleId: "score", priceFormat: { type: "price", precision: 0, minMove: 1 }, priceLineVisible: false, lastValueVisible: false });
+    priceChart.priceScale("score").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 }, visible: false });
+    score.setData(C.score.map((v, j) => v == null ? null : {
+      time: C.candles[j][0], value: v,
+      color: v >= cfg.threshold ? up : v >= 0 ? up + "70" : down + "70",
+    }).filter(Boolean));
+
+    // plan / position lines
+    const { lv } = levels();
+    const lineColor = { entry: cssVar("--hold"), stop: down, tp: up, pull: cssVar("--s2") };
+    lv.forEach((l) => candleSeries.createPriceLine({ price: l.px, color: lineColor[l.k], lineWidth: 1, lineStyle: 0, axisLabelVisible: true, title: l.label }));
+
+    // markers
+    const ev = C.events.slice(-14).map((e) => ({
+      time: e.time - off, position: e.dir > 0 ? "aboveBar" : "belowBar", color: cssVar("--muted"),
+      shape: "circle", size: 0.4, text: e.type,
+    }));
+    const tr = C.trades.flatMap((t) => [
+      { time: t.entry_time - off, position: "belowBar", color: cssVar("--hold"), shape: "arrowUp", text: "進" },
+      { time: t.exit_time - off, position: "aboveBar", color: t.r >= 0 ? up : down, shape: "arrowDown", text: sgn(t.r, 1, "R") },
+    ]);
+    if (POS) tr.push({ time: POS.entry_time - off, position: "belowBar", color: cssVar("--hold"), shape: "arrowUp", text: "持倉" });
+    markerSets = { ev, tr };
+    applyMarkers();
+    applyZones();
+
+    priceChart.subscribeCrosshairMove((p) => {
+      const out = $("ohlc-readout");
+      if (!out) return;
+      const b = p.seriesData?.get(candleSeries);
+      const s = p.seriesData?.get(score);
+      out.textContent = b ? `開 ${fmt(b.open)} 高 ${fmt(b.high)} 低 ${fmt(b.low)} 收 ${fmt(b.close)}${s ? `　分數 ${fmt(s.value, 0)}` : ""}` : "";
+    });
+    priceChart.timeScale().setVisibleLogicalRange({ from: C.candles.length - 180, to: C.candles.length + 6 });
+  }
+
+  function applyMarkers() {
+    const showTrades = $("tg-trades").checked;
+    const m = [...markerSets.ev, ...(showTrades ? markerSets.tr : [])].sort((a, b) => a.time - b.time);
+    candleSeries.setMarkers(m);
+  }
+
+  function applyZones() {
+    zoneLines.forEach((l) => candleSeries.removePriceLine(l));
+    zoneLines = [];
+    if (!$("tg-zones").checked) return;
+    const price = D.price;
+    const active = D.chart.zones.filter((z) => z.end == null);
+    const nearest = (kind, n) => active.filter((z) => z.kind === kind)
+      .sort((a, b) => Math.abs((a.top + a.bottom) / 2 - price) - Math.abs((b.top + b.bottom) / 2 - price)).slice(0, n);
+    const up = cssVar("--up"), down = cssVar("--down");
+    for (const z of [...nearest("bull_ob", 2), ...nearest("bear_ob", 2)]) {
+      const c = z.kind === "bull_ob" ? up : down, name = z.kind === "bull_ob" ? "多方 OB" : "空方 OB";
+      zoneLines.push(candleSeries.createPriceLine({ price: z.top, color: c, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: name }));
+      zoneLines.push(candleSeries.createPriceLine({ price: z.bottom, color: c, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: "" }));
+    }
+    for (const z of [...nearest("bull_fvg", 2), ...nearest("bear_fvg", 2)]) {
+      const c = z.kind === "bull_fvg" ? up : down;
+      zoneLines.push(candleSeries.createPriceLine({ price: (z.top + z.bottom) / 2, color: c, lineWidth: 1, lineStyle: 1, axisLabelVisible: false, title: "FVG" }));
+    }
+  }
+
+  function drawEquity() {
+    const el = $("equity-chart");
+    el.innerHTML = "";
+    equityChart = chartBase(el, {
+      rightPriceScale: { borderColor: cssVar("--line"), mode: 1 },
+      localization: { locale: "zh-TW", priceFormatter: (v) => sgn((v - 1) * 100, 0) },
+      timeScale: { borderColor: cssVar("--line"), minBarSpacing: 0.05 },  // ~2,800 daily points must fit
+    });
+    const eq = D.backtest.equity;
+    const s1 = equityChart.addLineSeries({ color: cssVar("--s1"), lineWidth: 2, title: "策略", priceLineVisible: false });
+    const s2 = equityChart.addLineSeries({ color: cssVar("--s2"), lineWidth: 2, title: "買入持有", priceLineVisible: false });
+    s1.setData(eq.map(([t, v]) => ({ time: t, value: v })));
+    s2.setData(eq.map(([t, , b]) => ({ time: t, value: b })));
+    equityChart.timeScale().fitContent();
+    requestAnimationFrame(() => equityChart.timeScale().fitContent()); // after autoSize has measured the box
+    const oosT = Date.parse(D.backtest.oos.start) / 1000;
+    s1.setMarkers([{ time: eq.find(([t]) => t >= oosT)[0], position: "aboveBar", color: cssVar("--muted"), shape: "arrowDown", text: "樣本外開始" }]);
+    $("eq-legend").innerHTML = `<span><i style="background:${cssVar("--s1")}"></i>策略（每筆風險 1%）</span><span><i style="background:${cssVar("--s2")}"></i>買入持有</span>`;
+  }
+
+  function drawCharts() {
+    if (!window.LightweightCharts) {
+      $("price-chart").innerHTML = '<p class="note">圖表程式庫載入失敗（需要網路連線到 unpkg.com）。其餘數據不受影響。</p>';
+      return;
+    }
+    priceChart?.remove(); equityChart?.remove();
+    drawPrice();
+    drawEquity();
+  }
+
+  $("tg-trades").addEventListener("change", applyMarkers);
+  $("tg-zones").addEventListener("change", applyZones);
+
+  // ---- live price ---------------------------------------------------------------
+  const SOURCES = [
+    ["Binance", "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT", (j) => +j.price],
+    ["Binance", "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", (j) => +j.price],
+    ["OKX", "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT", (j) => +j.data[0].last],
+  ];
+  async function poll() {
+    for (const [name, url, pick] of SOURCES) {
+      try {
+        const r = await fetch(url, { cache: "no-store" });
+        if (!r.ok) continue;
+        const p = pick(await r.json());
+        if (!p) continue;
+        const el = $("live-price");
+        el.classList.remove("tick-up", "tick-down");
+        if (live != null && p !== live) el.classList.add(p > live ? "tick-up" : "tick-down");
+        live = p;
+        el.textContent = fmt(p, 2);
+        $("live-src").textContent = `${name} 即時`;
+        renderTicket();
+        return;
+      } catch { /* try next source */ }
+    }
+    $("live-src").textContent = "即時價格無法取得，顯示最新收盤";
+  }
+
+  // ---- method text derived from the live config ---------------------------------------
+  function renderMeta() {
+    $("live-price").textContent = fmt(D.price, 2);
+    $("m-signal").textContent = `每根 4h K 線收盤後計算共振分數（-100 到 +100）。日線收盤在 EMA200 之上、` +
+      `且分數達 ${cfg.threshold} 分時發出做多訊號，下一根 K 線開盤進場。` +
+      (cfg.sides === "long_only" ? "只做多，日線轉空時整個策略空手。" : "日線轉空時改為做空。");
+    const sl = cfg.sl_mode === "atr" ? `進場價下方 ${cfg.sl_atr} 倍 ATR` : "最近的波段低點下方（限制在 1 到 3 倍 ATR）";
+    const exit = cfg.exit_mode === "trail"
+      ? `到 ${cfg.tp1_r}R 先平一半並把止損移到進場價，剩下一半用「最高價減 ${cfg.trail_atr} 倍 ATR」的移動停損跟隨趨勢。`
+      : cfg.exit_mode === "partial" ? `到 ${cfg.tp1_r}R 先平一半並移到保本，剩下在 ${cfg.tp2_r}R 全部出場。`
+      : `在 ${cfg.tp1_r}R 一次出場。`;
+    $("m-exit").textContent = `止損放在${sl}。${exit}持有超過一定時間未出場則平倉（約 10 天）。`;
+    $("foot").textContent = `資料產生於 ${dateStr(Date.parse(D.generated_at) / 1000)}。策略參數：門檻 ${cfg.threshold}、swing ${cfg.swing_len}、` +
+      `止損 ${cfg.sl_atr}×ATR、TP1 ${cfg.tp1_r}R、移動停損 ${cfg.trail_atr}×ATR。本頁僅為研究用途，不構成投資建議。`;
+  }
+
+  renderMeta();
+  renderFreshness();
+  renderVerdict();
+  renderTicket();
+  renderFactors();
+  renderTF();
+  renderBacktest();
+  renderResearch();
+  drawCharts();
+  poll();
+  setInterval(poll, 15000);
+  setInterval(renderFreshness, 60000);
+  window.addEventListener("resize", () => renderTicket());
+})();
