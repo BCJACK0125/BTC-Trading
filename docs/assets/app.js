@@ -4,6 +4,7 @@
   const R = window.BTC_RESEARCH;
   const H = Array.isArray(window.BTC_HISTORY) ? window.BTC_HISTORY : [];
   const L = window.BTC_LTF;
+  const F = window.BTC_FLOWS;
   const $ = (id) => document.getElementById(id);
   const root = document.documentElement;
 
@@ -432,6 +433,28 @@
       "勝率、平均每筆、成交率、止損為樣本內數字。";
   }
 
+  function renderFlows() {
+    if (!F?.best_by_family) { $("flows").hidden = true; return; }
+    const fam = { prem_filter: "Coinbase 溢價過濾", prem_factor: "Coinbase 溢價因子", fund_filter: "資金費率擁擠過濾", fund_factor: "資金費率反向因子" };
+    const b = F.baseline;
+    $("flows-lede").textContent = `「法人動向」常見的指標裡，ETF 流量只有 2024 年以後的資料、COT 每週一次且大多是套利部位，無法做樣本內／樣本外驗證，所以只測能回溯到 2019 年的兩種：` +
+      `Coinbase 溢價（美國現貨買盤）與永續資金費率（槓桿多單擁擠程度），各當成進場過濾或第 8 個因子，共 ${F.n_variants} 種設定。` +
+      `結果 ${F.beat_is} 種在樣本內、${F.beat_oos} 種在樣本外勝過目前策略，兩者都勝過的有 ${F.beat_both} 種。`;
+    const rows = [["目前策略", "—", b, null], ...Object.entries(F.best_by_family).map(([k, v]) => [fam[k] || k, v.label, v, F.median_by_family[k]])];
+    $("flows-table").innerHTML = `<thead><tr><th>方式</th><th>樣本內最好的設定</th><th>樣本內 Sharpe</th><th>樣本外 Sharpe</th><th>同類中位數（內／外）</th>
+      <th>樣本外年化</th><th>樣本外回撤</th><th>樣本外交易</th><th>訊號變動</th></tr></thead><tbody>` +
+      rows.map(([name, label, v, med], i) => `<tr${i === 0 ? ' style="font-weight:700"' : ""}><td>${name}</td><td>${label}</td>
+        <td>${fmt(v.is_sharpe, 2)}</td><td class="${cls(v.oos_sharpe)}">${fmt(v.oos_sharpe, 2)}</td><td>${med ? `${fmt(med.is_sharpe, 2)}／${fmt(med.oos_sharpe, 2)}` : "—"}</td>
+        <td>${sgn(v.oos_cagr_pct, 1)}</td><td>${fmt(v.oos_max_dd_pct, 1)}%</td><td>${v.oos_trades}</td><td>${fmt(v.changed_pct, 0)}%</td></tr>`).join("") + "</tbody>";
+    const ff = F.best_by_family.fund_filter, d = F.deflated_best;
+    $("flows-note").textContent =
+      (ff ? `表現最好的是資金費率擁擠過濾（${ff.label}）：樣本內 Sharpe ${fmt(ff.is_sharpe, 2)} 對 ${fmt(b.is_sharpe, 2)}，靠的是避開 2020–2021 年資金費率過熱時的進場；` +
+        `但 2022 年以後資金費率很少這麼高，樣本外它幾乎沒有觸發，結果 ${fmt(ff.oos_sharpe, 2)} 對 ${fmt(b.oos_sharpe, 2)}。` +
+        "門檻之間也不一致（0.03% 有幫助、0.05% 反而變差），比較像雜訊。" : "") +
+      (d ? `把這 ${F.n_variants} 種也算進試驗次數後，它的 Deflated Sharpe 只有 ${fmt(d.dsr, 1)}%。` : "") +
+      "Coinbase 溢價則是兩種用法都沒有幫助：溢價為正、資金費率高，常常正是趨勢最強、這套策略最賺錢的時候。結論是不加入策略；頁面上方的資金費率仍可當擁擠程度的參考。";
+  }
+
   function renderResearch() {
     if (!R) { $("res-lede").textContent = "找不到研究資料（docs/data/research.js），請執行 python scripts/research.py。"; $("robust").hidden = true; return; }
     $("res-lede").textContent = `共測試 ${R.n_configs} 組參數（週期、swing 長度、權重、門檻、多空方向、出場方式、止損方式），` +
@@ -641,6 +664,7 @@
   renderResearch();
   renderRobust();
   renderLtf();
+  renderFlows();
   renderCompare();
   renderHistory();
   drawCharts();

@@ -160,3 +160,30 @@ def test_ltf_entries_respect_rules(hourly):
     for t in ltf.run(f4, h1, feats, cfg, rule)["trades"]:
         assert 2 <= t["wait_h"] <= rule.window_h + 1   # trigger confirmed on a later close, entered next open
         assert rule.min_stop_atr - 1e-9 <= t["stop_atr"] <= rule.max_stop_atr + 1e-9
+
+
+def test_flow_features_no_lookahead():
+    from btc_signal import flows
+    hours = pd.date_range("2024-01-01 01:00", periods=24 * 20, freq="1h", tz="UTC")
+    bn = pd.DataFrame({"close": np.full(len(hours), 100.0)}, index=hours)
+    cb = pd.Series(100.05, index=hours)                     # steady +0.05% premium
+    bars = pd.date_range("2024-01-02 04:00", periods=100, freq="4h", tz="UTC")
+    cut = bars[50]
+    spiked = cb.copy()
+    spiked[spiked.index > cut] = 101.0                     # +1% after the cut
+    a = flows.premium_features(cb, bn, bars)
+    b = flows.premium_features(spiked, bn, bars)
+    pd.testing.assert_frame_equal(a.loc[:cut], b.loc[:cut])  # bars up to the cut never see later hours
+    assert a["cb_prem_24h"].loc[cut] == pytest.approx(0.05)
+    assert b["cb_prem_24h"].iloc[-1] > 0.5
+
+    fund = pd.Series(0.0001, index=pd.date_range("2024-01-01", periods=60, freq="8h", tz="UTC"))
+    fund.iloc[40:] = 0.001
+    ff = flows.funding_features(fund, bars)
+    first_hot = fund.index[40]
+    before = ff.loc[:first_hot - pd.Timedelta(minutes=1), "fund_3"].dropna()
+    assert len(before) and np.allclose(before, 0.01)        # % per 8h, no hot payment leaks in early
+
+    f = pd.DataFrame({"signal": [1, 1, 1, 0]})
+    g = flows.with_filter(f, pd.Series([True, False, np.nan, True]))
+    assert g["signal"].tolist() == [1, 0, 1, 0]             # missing data never blocks a signal
