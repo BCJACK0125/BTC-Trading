@@ -224,7 +224,7 @@
   function renderBacktest() {
     const B = D.backtest, oos = B.oos, is = B.is;
     const bh = R?.baselines || {};
-    $("bt-lede").textContent = `${B.full.start} 到 ${B.full.end}，每筆交易風險 1% 資金，含手續費與滑價。` +
+    $("bt-lede").textContent = `${B.full.start} 到 ${B.full.end}，每筆交易風險 1% 資金（最高 0.82 倍部位，可用現貨執行，不含資金費率），含手續費與滑價。槓桿與資金費率的影響見下方「公平比較」。` +
       `參數只用 ${is.start}～${is.end} 挑選，${oos.start} 之後是沒看過的樣本外資料。`;
     const kpi = (v, k, c) => `<div class="kpi"><div class="v">${v}</div><div class="k">${k}</div><div class="c">${c}</div></div>`;
     $("kpis").innerHTML =
@@ -246,9 +246,6 @@
       `<tr><td colspan="4" style="padding-top:14px;color:var(--muted)">對照：買入持有</td></tr>` +
       bhRow("年化報酬", "cagr_pct", (v) => sgn(v, 1)) + bhRow("最大回撤", "max_dd_pct", (v) => fmt(v, 1) + "%") +
       bhRow("Sharpe", "sharpe", (v) => fmt(v, 2)) + "</tbody>";
-
-    $("risk-table").innerHTML = `<thead><tr><th>每筆風險</th><th>年化</th><th>最大回撤</th><th>總報酬</th></tr></thead><tbody>` +
-      B.risk_table.map((r) => `<tr><td>${fmt(r.risk_pct, 1)}%</td><td>${sgn(r.cagr_pct, 1)}</td><td>${fmt(r.max_dd_pct, 1)}%</td><td>${sgn(r.total_return_pct, 0)}</td></tr>`).join("") + "</tbody>";
 
     $("bucket-table").innerHTML = `<thead><tr><th>進場分數</th><th>筆數</th><th>勝率</th><th>平均</th></tr></thead><tbody>` +
       B.score_buckets.map((b) => `<tr><td>${b.range}</td><td>${b.trades}</td><td>${fmt(b.win_rate, 0)}%</td><td class="${cls(b.avg_r)}">${sgn(b.avg_r, 2, "R")}</td></tr>`).join("") + "</tbody>";
@@ -278,6 +275,75 @@
     };
     $("years").innerHTML = yearly.map((y) => `<div class="yr"><span>${y.year}</span><div class="yr-bars" role="img"
       aria-label="${y.year} 年 策略 ${sgn(y.strategy, 1)}，買入持有 ${sgn(y.buy_hold, 1)}">${bar(y.strategy, "s")}${bar(y.buy_hold, "h")}</div></div>`).join("");
+  }
+
+  // ---- like-for-like comparison: leverage, equal drawdown, DCA ----------------------
+  const PERIODS = D.compare?.periods || [];
+  const cmpState = store.get("cmp", { period: "oos", risk: "1" });
+  if (!PERIODS.some((p) => p.key === cmpState.period)) cmpState.period = PERIODS[0]?.key;
+  const period = () => PERIODS.find((p) => p.key === cmpState.period);
+
+  function seg(el, options, current, onPick) {
+    el.innerHTML = options.map(([v, label]) =>
+      `<button type="button" data-v="${v}" aria-pressed="${v === current}">${label}</button>`).join("");
+    el.onclick = (ev) => {
+      const b = ev.target.closest("button");
+      if (b) onPick(b.dataset.v);
+    };
+  }
+
+  function renderCompare() {
+    const per = period();
+    if (!per) return;
+    seg($("period-seg"), PERIODS.map((p) => [p.key, p.label]), cmpState.period, (v) => {
+      cmpState.period = v; store.set("cmp", cmpState); renderCompare(); if (window.LightweightCharts) { equityChart?.remove(); drawEquity(); }
+    });
+    const risks = Object.keys(per.chart).filter((k) => k.startsWith("strategy_")).map((k) => k.slice(9));
+    if (!risks.includes(cmpState.risk)) cmpState.risk = risks[0];
+    seg($("risk-seg"), risks.map((r) => [r, `${r}%`]), cmpState.risk, (v) => {
+      cmpState.risk = v; store.set("cmp", cmpState); renderCompare(); if (window.LightweightCharts) { equityChart?.remove(); drawEquity(); }
+    });
+
+    const hold1 = per.hold.find((h) => h.lev === 1);
+    const r1 = per.risk.find((r) => r.risk_pct === 1);
+    $("cmp-lede").textContent = `${per.start} 到 ${per.end}。策略每筆只冒 1% 風險、平均部位只有 ${fmt(r1?.avg_lev, 2)} 倍，` +
+      `大部分時間空手；買入持有則是 100% 一直在場。直接比報酬會低估策略，只看 Sharpe 又會高估它。` +
+      `公平的比法是在同樣的回撤下比報酬，或把兩邊都放大到同樣的槓桿。` +
+      (hold1 ? `這段期間買入持有年化 ${sgn(hold1.cagr_pct, 1)}、最大回撤 ${fmt(hold1.max_dd_pct, 1)}%。` : "");
+
+    // equal drawdown: metric rows x (hold, matched strategy) column pairs
+    const M = per.matched;
+    const head = M.map((m) => `<th>買入持有 ${m.hold_lev}×</th><th class="hl">策略（同回撤）</th>`).join("");
+    const row = (label, fh, fs) => `<tr><td>${label}</td>` + M.map((m) => `<td>${fh(m.hold)}</td><td class="hl">${fs(m.strategy)}</td>`).join("") + "</tr>";
+    $("match-table").innerHTML = `<thead><tr><th></th>${head}</tr></thead><tbody>` +
+      row("最大回撤", (h) => fmt(h.max_dd_pct, 1) + "%", (s) => fmt(s.max_dd_pct, 1) + "%") +
+      row("年化報酬", (h) => `<span class="${cls(h.cagr_pct)}">${sgn(h.cagr_pct, 1)}</span>`, (s) => `<b class="${cls(s.cagr_pct)}">${sgn(s.cagr_pct, 1)}</b>`) +
+      row("Sharpe", (h) => fmt(h.sharpe, 2), (s) => fmt(s.sharpe, 2)) +
+      row("每筆風險", () => "—", (s) => fmt(s.risk_pct, 1) + "%") +
+      row("平均／最高槓桿", (h) => `${h.lev}×`, (s) => `${fmt(s.avg_lev, 1)}×／${fmt(s.max_lev, 1)}×`) +
+      row("蒙地卡羅最差 5% 回撤", () => "—", (s) => s.mc_dd_p5 == null ? "—" : fmt(s.mc_dd_p5, 1) + "%") + "</tbody>";
+    $("match-note").textContent = "策略的每筆風險是事後挑來剛好打平回撤的，實際上無法事先知道會是多少；" +
+      "蒙地卡羅那一列是同樣設定換個交易順序的最差 5% 情況，高槓桿時明顯更深。槓桿越高，跳空滑價、插針與交易所風險也越大，回測都沒有算進去。";
+
+    $("risk-table").innerHTML = `<thead><tr><th>每筆風險</th><th>平均／最高槓桿</th><th>年化（未扣資金費率）</th><th class="hl">年化（扣資金費率）</th><th>最大回撤</th><th>蒙地卡羅最差 5%</th><th>Sharpe</th></tr></thead><tbody>` +
+      per.risk.map((r) => `<tr><td>${fmt(r.risk_pct, 0)}%</td><td>${fmt(r.avg_lev, 2)}×／${fmt(r.max_lev, 2)}×</td>
+        <td>${sgn(r.cagr_no_funding_pct, 1)}</td><td class="hl ${cls(r.cagr_pct)}">${sgn(r.cagr_pct, 1)}</td><td>${fmt(r.max_dd_pct, 1)}%</td>
+        <td>${r.mc_dd_p5 == null ? "—" : fmt(r.mc_dd_p5, 1) + "%"}</td><td>${fmt(r.sharpe, 2)}</td></tr>`).join("") + "</tbody>";
+    const fa = D.compare.funding_avg_annual_pct;
+    $("risk-note").textContent = `槓桿由「每筆風險 ÷ 止損距離」決定，不是另外設定的。以永續合約執行時，持倉每 8 小時支付實際歷史資金費率` +
+      (fa != null ? `（2019 年以來平均每年約 ${fmt(fa, 1)}% 的名目部位）` : "") +
+      `。風險 1% 時最高槓桿不到 1 倍，可以直接用現貨，不必付資金費率，看「未扣資金費率」那欄即可。報酬與回撤大致隨風險等比例放大，但蒙地卡羅的最差情況放大得更快。`;
+
+    const D_ = per.dca;
+    $("hold-table").innerHTML = `<thead><tr><th></th><th>年化</th><th>總報酬</th><th>最大回撤</th><th>Sharpe</th></tr></thead><tbody>` +
+      per.hold.map((h) => `<tr><td>買入持有 ${h.lev}×${h.liquidated ? "（爆倉）" : ""}</td><td class="${cls(h.cagr_pct)}">${sgn(h.cagr_pct, 1)}</td>
+        <td class="${cls(h.total_return_pct)}">${sgn(h.total_return_pct, 0)}</td><td>${fmt(h.max_dd_pct, 1)}%</td><td>${fmt(h.sharpe, 2)}</td></tr>`).join("") +
+      `<tr><td>每月定期定額</td><td class="${cls(D_.irr_pct)}">IRR ${sgn(D_.irr_pct, 1)}</td><td class="${cls(D_.return_on_invested_pct)}">${sgn(D_.return_on_invested_pct, 1)}</td>` +
+      `<td>${fmt(D_.value_dd_pct, 1)}%</td><td>—</td></tr></tbody>`;
+    $("hold-note").textContent = "槓桿版本每天調整回固定倍數，超過 1 倍以永續合約持有並支付資金費率；單日最低價足以歸零時視為爆倉。" +
+      `波動越大，加槓桿越吃虧：同期間 2 倍的報酬常常不到 1 倍的兩倍，回撤卻深得多。` +
+      `定期定額是從起點每月第一天投入同樣金額（共 ${D_.months} 次），報酬以資金加權 IRR 計算、總報酬是相對於累計投入，` +
+      `和一次投入的年化不能直接相比；期間投入資金最深曾虧 ${fmt(D_.worst_vs_invested_pct, 1)}%。`;
   }
 
   // ---- forward signal log ---------------------------------------------------------
@@ -454,21 +520,32 @@
   function drawEquity() {
     const el = $("equity-chart");
     el.innerHTML = "";
+    const per = period();
+    if (!per) return;
     equityChart = chartBase(el, {
       rightPriceScale: { borderColor: cssVar("--line"), mode: 1 },
       localization: { locale: "zh-TW", priceFormatter: (v) => sgn((v - 1) * 100, 0) },
       timeScale: { borderColor: cssVar("--line"), minBarSpacing: 0.05 },  // ~2,800 daily points must fit
     });
-    const eq = D.backtest.equity;
-    const s1 = equityChart.addLineSeries({ color: cssVar("--s1"), lineWidth: 2, title: "策略", priceLineVisible: false });
-    const s2 = equityChart.addLineSeries({ color: cssVar("--s2"), lineWidth: 2, title: "買入持有", priceLineVisible: false });
-    s1.setData(eq.map(([t, v]) => ({ time: t, value: v })));
-    s2.setData(eq.map(([t, , b]) => ({ time: t, value: b })));
+    const C = per.chart, risk = cmpState.risk;
+    const lines = [
+      [`strategy_${risk}`, "--s1", `策略（每筆風險 ${risk}%）`],
+      ["hold_1", "--s2", "買入持有 1×"],
+      ["hold_2", "--s3", "買入持有 2×"],
+    ].filter(([k]) => C[k]);
+    const series = lines.map(([k, c, name]) => {
+      const s = equityChart.addLineSeries({ color: cssVar(c), lineWidth: k.startsWith("strategy") ? 2.5 : 1.5, priceLineVisible: false, lastValueVisible: true, title: "" });
+      s.setData(C.time.map((t, i) => ({ time: t, value: Math.max(C[k][i], 0.001) })));
+      return s;
+    });
     equityChart.timeScale().fitContent();
     requestAnimationFrame(() => equityChart.timeScale().fitContent()); // after autoSize has measured the box
     const oosT = Date.parse(D.backtest.oos.start) / 1000;
-    s1.setMarkers([{ time: eq.find(([t]) => t >= oosT)[0], position: "aboveBar", color: cssVar("--muted"), shape: "arrowDown", text: "樣本外開始" }]);
-    $("eq-legend").innerHTML = `<span><i style="background:${cssVar("--s1")}"></i>策略（每筆風險 1%）</span><span><i style="background:${cssVar("--s2")}"></i>買入持有</span>`;
+    const tOos = C.time.find((t) => t >= oosT);
+    if (per.key === "full" && tOos) {
+      series[0].setMarkers([{ time: tOos, position: "aboveBar", color: cssVar("--muted"), shape: "arrowDown", text: "樣本外開始" }]);
+    }
+    $("eq-legend").innerHTML = lines.map(([, c, name]) => `<span><i style="background:${cssVar(c)}"></i>${name}</span>`).join("");
   }
 
   function drawCharts() {
@@ -535,6 +612,7 @@
   renderBacktest();
   renderResearch();
   renderRobust();
+  renderCompare();
   renderHistory();
   drawCharts();
   poll();

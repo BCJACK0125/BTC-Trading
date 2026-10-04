@@ -100,3 +100,30 @@ def test_smc_bos_and_choch():
     for e in res.events:
         assert e["i"] >= 2 * 3
     assert res.frame["struct"].iloc[-1] == 1
+
+
+def test_funding_charged_only_while_holding(frame):
+    f, cfg = frame
+    flat = pd.Series(0.001, index=pd.date_range(f.index[0].floor("8h"), f.index[-1], freq="8h"))
+    per_bar = backtest.funding_per_bar(f.index, flat)
+    assert per_bar.sum() == pytest.approx(0.001 * len(flat), rel=0.01)  # 4h bars: one charge every other bar
+    base = backtest.run(f, cfg, risk=0.03, max_lev=10)
+    paid = backtest.run(f, cfg, risk=0.03, max_lev=10, funding=flat)
+    assert paid["equity"].iloc[-1] < base["equity"].iloc[-1]
+    assert [t["entry_time"] for t in paid["trades"]] == [t["entry_time"] for t in base["trades"]]
+    assert all(t["lev"] <= 10 for t in paid["trades"])
+
+
+def test_leveraged_hold_and_dca():
+    from btc_signal import compare
+    idx = pd.date_range("2024-01-01", periods=200, freq="1D", tz="UTC")
+    close = pd.Series(np.r_[np.linspace(100, 200, 100), np.linspace(200, 120, 100)], index=idx)
+    daily = pd.DataFrame({"close": close, "low": close * 0.99})
+    one = compare.leveraged_hold(daily, 1.0, None)
+    assert (1 + one).prod() == pytest.approx(close.iloc[-1] / close.iloc[0])
+    crash = daily.copy()
+    crash.iloc[150, crash.columns.get_loc("low")] = crash["close"].iloc[149] * 0.6  # -40% wick
+    three = compare.leveraged_hold(crash, 3.0, None)
+    assert (three <= -1).any() and (1 + three).prod() == 0  # liquidated and stays dead
+    d = compare.dca(daily)
+    assert d["months"] == 7 and d["worst_vs_invested_pct"] <= d["return_on_invested_pct"]

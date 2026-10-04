@@ -21,12 +21,14 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from btc_signal import data, signals, backtest, history, notify  # noqa: E402
+from btc_signal import data, signals, backtest, compare, history, notify  # noqa: E402
 from btc_signal.signals import Config, FACTORS, FACTOR_LABELS  # noqa: E402
 
 OUT = ROOT / "docs" / "data" / "latest.json"
 CHART_BARS = 400
 OOS_START = "2024-01-01"
+# start dates offered by the dashboard's comparison panel
+PERIODS = [("full", "全期間", "2019-01-01"), ("oos", "樣本外 2024 起", OOS_START), ("y2025", "2025 起", "2025-01-01")]
 
 
 def r2(x, nd=2):
@@ -141,6 +143,7 @@ def main():
          for iv in ("1d", "4h", "1h")}
     fng = data.load_fear_greed()
     funding = data.load_funding_now()
+    funding_hist = data.load_funding_history(cache_dir=args.cache)
 
     f, smc = signals.compute(d[tf], d["1d"], cfg, fng)
     others = {iv: signals.compute(d[iv], d["1d"], cfg, fng)[0] for iv in ("1h", "4h", "1d") if iv != tf}
@@ -157,15 +160,8 @@ def main():
                           f"{cfg.trail_atr * row['atr']:,.0f} USDT）") if cfg.exit_mode == "trail" else None
     plan["time_stop_note"] = f"持有超過 {cfg.max_bars} 根 {tf} K 線（約 {cfg.max_bars * bar_hours / 24:g} 天）未出場則平倉"
 
-    risk_table = []
-    for risk in (0.005, 0.01, 0.02, 0.03):
-        m = backtest.run(f, cfg, risk=risk)["metrics"]
-        risk_table.append({"risk_pct": risk * 100, "cagr_pct": m["cagr_pct"], "max_dd_pct": m["max_dd_pct"],
-                           "total_return_pct": m["total_return_pct"]})
-
-    eq_daily = bt["equity"].resample("1D").last().dropna()
-    bh = d["1d"]["close"].reindex(eq_daily.index, method="ffill")
-    bh = bh / bh.iloc[0]
+    comparisons = [{"key": k, "label": label, **compare.period_report(f, cfg, d["1d"], funding_hist, start)}
+                   for k, label, start in PERIODS]
 
     view = f.iloc[-CHART_BARS:]
     t0 = view.index[0]
@@ -210,12 +206,13 @@ def main():
             "full": bt["metrics"],
             "is": backtest.run(f, cfg, end="2023-12-31")["metrics"],
             "oos": backtest.run(f, cfg, start=OOS_START)["metrics"],
-            "equity": [[int(t.timestamp()), round(float(v), 4), round(float(b), 4)]
-                       for t, v, b in zip(eq_daily.index, eq_daily, bh)],
             "yearly": yearly(bt["equity"], d["1d"]["close"]),
-            "risk_table": risk_table,
             "score_buckets": score_buckets(bt["trades"], f, cfg.threshold),
             "recent_trades": bt["trades"][-25:][::-1],
+        },
+        "compare": {
+            "funding_avg_annual_pct": round(float(funding_hist.mean() * 3 * 365 * 100), 1) if len(funding_hist) else None,
+            "periods": comparisons,
         },
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)

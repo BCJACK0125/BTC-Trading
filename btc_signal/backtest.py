@@ -4,7 +4,10 @@ Conservative assumptions:
 - a signal on bar i is filled at the open of bar i+1 (no same-bar entry);
 - if a bar touches both the stop and a target, the stop is assumed first;
 - every fill pays `fee` per side, stop/market fills also pay `slip`;
-- position size risks `risk` of current equity, capped at `max_lev` x equity.
+- position size risks `risk` of current equity, capped at `max_lev` x equity;
+- with `funding` (8h perpetual rates) an open position pays side x notional x rate
+  at every funding time it is held through; missing history (before the
+  perpetual listed) is charged at the 0.01% base rate.
 """
 from __future__ import annotations
 
@@ -13,16 +16,32 @@ import pandas as pd
 
 from .signals import Config, stop_distance
 
+BASE_FUNDING = 0.0001  # per 8h
+
+
+def funding_per_bar(index: pd.DatetimeIndex, funding: pd.Series) -> np.ndarray:
+    """Sum of funding rates charged during each bar (bars indexed by close time)."""
+    out = np.zeros(len(index))
+    if len(index) < 2:
+        return out
+    sched = pd.date_range(index[0].floor("8h"), index[-1], freq="8h")
+    rates = funding.sort_index().reindex(sched, method="nearest", tolerance=pd.Timedelta("1h")).fillna(BASE_FUNDING)
+    k = index.searchsorted(sched)  # first bar whose close is at or after the funding time
+    ok = (k < len(index)) & (sched > index[0] - (index[1] - index[0]))
+    np.add.at(out, k[ok], rates.to_numpy()[ok])
+    return out
+
 
 def run(f: pd.DataFrame, cfg: Config, risk: float = 0.01, fee: float = 0.0005,
         slip: float = 0.0002, max_lev: float = 2.0, start: str | None = None,
-        end: str | None = None) -> dict:
+        end: str | None = None, funding: pd.Series | None = None) -> dict:
     if start or end:
         f = f.loc[start:end]
     o, h, l, c = (f[k].to_numpy() for k in ("open", "high", "low", "close"))
     atr, sig = f["atr"].to_numpy(), f["signal"].to_numpy()
     idx = f.index
     n = len(f)
+    fund = funding_per_bar(idx, funding) if funding is not None else np.zeros(n)
 
     equity = 1.0
     eq = np.empty(n)
@@ -40,7 +59,7 @@ def run(f: pd.DataFrame, cfg: Config, risk: float = 0.01, fee: float = 0.0005,
             pos = {"side": side, "entry": entry, "qty": qty, "qty0": qty, "R": d,
                    "stop": entry - side * d, "tp1": entry + side * cfg.tp1_r * d,
                    "tp2": entry + side * cfg.tp2_r * d, "i": i, "tp1_hit": False,
-                   "extreme": entry, "pnl": 0.0, "eq0": equity}
+                   "extreme": entry, "pnl": 0.0, "eq0": equity, "lev": qty * entry / equity}
         pending = None
 
         if pos:
@@ -79,6 +98,7 @@ def run(f: pd.DataFrame, cfg: Config, risk: float = 0.01, fee: float = 0.0005,
                     "exit": round(exit_px, 2), "reason": reason,
                     "r": round(pos["pnl"] / (pos["qty0"] * pos["R"]), 3),
                     "ret_pct": round(pos["pnl"] / pos["eq0"] * 100, 3), "bars": i - pos["i"],
+                    "lev": round(pos["lev"], 2),
                 })
                 pos = None
                 cooldown_until = i + cfg.cooldown
@@ -86,6 +106,11 @@ def run(f: pd.DataFrame, cfg: Config, risk: float = 0.01, fee: float = 0.0005,
                 pos["extreme"] = max(pos["extreme"], h[i]) if s == 1 else min(pos["extreme"], l[i])
                 trail = pos["extreme"] - s * cfg.trail_atr * atr[i]
                 pos["stop"] = max(pos["stop"], trail) if s == 1 else min(pos["stop"], trail)
+
+        if pos and fund[i]:
+            cost = pos["side"] * pos["qty"] * c[i] * fund[i]
+            equity -= cost
+            pos["pnl"] -= cost
 
         mark = equity
         if pos:
@@ -132,5 +157,7 @@ def metrics(eq: pd.Series, trades: list[dict], f: pd.DataFrame) -> dict:
         "profit_factor": round(float(wins.sum() / -losses.sum()), 2) if len(losses) and losses.sum() < 0 else None,
         "avg_r": round(float(rs.mean()), 3) if len(rs) else 0.0,
         "exposure_pct": round(in_mkt * 100, 1),
+        "avg_lev": round(float(np.mean([t["lev"] for t in trades])), 2) if trades else 0.0,
+        "max_lev": round(float(np.max([t["lev"] for t in trades])), 2) if trades else 0.0,
         "buy_hold_pct": round((bh - 1) * 100, 2),
     }

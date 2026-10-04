@@ -97,28 +97,14 @@
     <h2 id="bt-title">回測證據</h2>
     <p class="lede" id="bt-lede"></p>
     <div class="kpis" id="kpis"></div>
-    <div class="bt-grid">
-      <div>
-        <div class="block-head">
-          <h3>資金曲線（對數刻度）</h3>
-          <span class="legend" id="eq-legend"></span>
-        </div>
-        <div class="chart small" id="equity-chart" aria-label="策略與買入持有的資金曲線"></div>
-      </div>
+    <div class="bt-grid three">
       <div>
         <h3>樣本內 / 樣本外</h3>
         <table class="stats" id="stats-table"></table>
       </div>
-    </div>
-    <div class="bt-grid three">
       <div>
         <div class="block-head"><h3>逐年報酬</h3><span class="legend" id="yr-legend"></span></div>
         <div class="years" id="years"></div>
-      </div>
-      <div>
-        <h3>每筆風險與報酬</h3>
-        <table class="stats" id="risk-table"></table>
-        <p class="note">Sharpe 幾乎不隨風險改變；放大風險只是同比例放大報酬和回撤。</p>
       </div>
       <div>
         <h3>進場分數與結果</h3>
@@ -128,6 +114,35 @@
     </div>
     <h3>最近交易</h3>
     <div class="scroll-x"><table class="trades" id="trades-table"></table></div>
+  </section>
+
+  <section class="block" aria-labelledby="cmp-title">
+    <div class="block-head">
+      <h2 id="cmp-title">公平比較：同樣的風險，誰賺得多</h2>
+      <div class="seg" role="group" aria-label="比較起點" id="period-seg"></div>
+    </div>
+    <p class="lede" id="cmp-lede"></p>
+    <div class="block-head">
+      <h3>資金曲線（對數刻度）</h3>
+      <div class="seg small" role="group" aria-label="策略每筆風險" id="risk-seg"></div>
+    </div>
+    <span class="legend" id="eq-legend"></span>
+    <div class="chart small" id="equity-chart" aria-label="策略與買入持有的資金曲線"></div>
+    <div class="bt-grid even">
+      <div>
+        <h3>同樣回撤下的報酬</h3>
+        <div class="scroll-x"><table class="stats" id="match-table"></table></div>
+        <p class="note" id="match-note"></p>
+      </div>
+      <div>
+        <h3>買入持有與定期定額</h3>
+        <div class="scroll-x"><table class="stats" id="hold-table"></table></div>
+        <p class="note" id="hold-note"></p>
+      </div>
+    </div>
+    <h3>每筆風險、槓桿與報酬</h3>
+    <div class="scroll-x"><table class="stats" id="risk-table"></table></div>
+    <p class="note" id="risk-note"></p>
   </section>
 
   <section class="block" aria-labelledby="res-title">
