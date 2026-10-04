@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 data/cache/
 reports/grid_results.csv
+reports/ltf_grid.csv

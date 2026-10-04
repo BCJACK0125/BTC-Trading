@@ -14,6 +14,7 @@ BTCUSDT 4 小時的多因子 + SMC（Smart Money Concepts）共振訊號，加�
 pip install -r requirements.txt
 python scripts/update.py      # 抓最新 K 線、計算訊號與回測，寫入 docs/data/
 python scripts/research.py    # 重跑參數研究與過度擬合檢驗（約 2 分鐘），會改寫 config/strategy.json
+python scripts/ltf_research.py  # 1h 進場方式研究（約 1 分鐘）
 python -m pytest -q tests     # 測試（含「不偷看未來資料」檢查）
 python -m btc_signal.notify "測試"  # 選用：測試 Telegram / Discord 推播設定
 ```
@@ -51,7 +52,7 @@ SMC 偵測（`btc_signal/smc.py`）用 TradingView MCP 對照過 LuxAlgo「Smart
 | 勝率 / 獲利因子 | 51.7% / 1.97 | 52.6% / 1.94 | |
 
 - 樣本內前 20 名在樣本外 100% 仍獲利，樣本外 Sharpe 中位數 1.27，代表不是單一參數碰巧。
-- 4h 明顯優於 1h（中位 Sharpe 0.83 vs 0.08）；加入 1h 確認不會改善結果。
+- 4h 明顯優於 1h（中位 Sharpe 0.83 vs 0.08）。用 1h 找進場點也沒有幫助，見下方。
 - 分數高不代表結果更好：40–50 分進場平均 +0.58R，70 分以上 +0.39R。
 - 弱點：只做多，牛市大幅落後買入持有（2020 年 +26% vs +299%）；優勢是避開熊市（2022 年 0% vs -65%）。
 
@@ -74,6 +75,18 @@ SMC 偵測（`btc_signal/smc.py`）用 TradingView MCP 對照過 LuxAlgo「Smart
 - 回撤同為 -30% 時，策略（風險約 4.8%）年化 54.5%，買入持有 0.5× 只有 16.6%。不過那個風險值是事後挑來剛好打平回撤的，同樣設定的蒙地卡羅最差 5% 回撤是 -45%。
 - 買入持有加槓桿會被波動吃掉：2× 的報酬比 1× 還低，回撤卻深得多；從 2019 年起算 3× 會爆倉。策略有止損又常空手，報酬和回撤大致隨風險等比例放大。
 - 定期定額不比較公平：它是分批投入的現貨流，報酬以 IRR 計算，和一次投入的年化不能直接比。這段期間 BTC 先漲後跌，定期定額反而比一次投入差，放進比較只會讓策略看起來更好，所以只列為參考。
+
+### 用 1 小時線找進場點有沒有用？
+
+常見做法是大週期定方向、小週期找進場：等價格回檔到 OB/FVG，或等 1h 出現 CHoCH/BOS 再進，止損放在 1h 波段低點，好處是止損更近。`scripts/ltf_research.py` 把 4h 訊號放到 1h K 線上執行（`btc_signal/ltf.py`，進場後的管理與原策略相同），測了 36 種變化：
+
+| 進場方式 | 最佳設定 | 樣本內 Sharpe | 樣本外 Sharpe | 同類中位數（內／外） |
+|---|---|---|---|---|
+| 下一根開盤直接進（目前） | — | 1.22 | 1.56 | — |
+| 掛單等回檔 | 收盤價 −0.25 ATR，8 小時 | 1.19 | 1.15 | 0.86 / 0.65 |
+| 等 1h 結構突破 | swing 5，8 小時，1h 止損 | 1.12 | 0.67 | 0.66 / 0.68 |
+
+36 種變化沒有任何一種在樣本內或樣本外贏過直接進場。原因是逆向選擇：直接進場的交易中，8 小時內曾回檔 0.5 ATR（掛單會成交）的只有 51%，平均 +0.13R；從不回頭的那些平均 +0.66R，貢獻總獲利的 83%。掛在 1 ATR 下方的單只會買到虧損的交易（平均 −0.35R）。趨勢跟隨的獲利來自少數不回頭的大波段，追求更好的進場價反而會錯過它們；1h 止損更近，也更容易被雜訊掃掉。完整結果：[reports/ltf_research.md](reports/ltf_research.md)。
 
 ### 過度擬合檢驗
 
@@ -124,9 +137,9 @@ Walk-forward 每年都選到「4h、swing 5、只做多、移動停損、ATR 止
 btc_signal/   data.py 資料源、indicators.py 技術指標、smc.py 結構/OB/FVG、
               signals.py 評分與交易計畫、backtest.py 回測、
               stats.py PSR/DSR 與蒙地卡羅、compare.py 槓桿／等回撤／定期定額比較、
-              history.py 訊號紀錄、notify.py 推播
+              ltf.py 在 1h K 線上執行 4h 訊號、history.py 訊號紀錄、notify.py 推播
 data/         funding_seed.csv 資金費率歷史（cache/ 為本機快取，不進版控）
-scripts/      update.py 產生儀表板資料、research.py 參數研究
+scripts/      update.py 產生儀表板資料、research.py 參數研究、ltf_research.py 1h 進場研究
 config/       strategy.json 目前採用的參數（由 research.py 產生）
 docs/         儀表板（GitHub Pages 根目錄），data/ 為產出的資料
 tests/        合成資料測試，含 no-lookahead 檢查

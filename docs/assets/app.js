@@ -3,6 +3,7 @@
   const D = window.BTC_DATA;
   const R = window.BTC_RESEARCH;
   const H = Array.isArray(window.BTC_HISTORY) ? window.BTC_HISTORY : [];
+  const L = window.BTC_LTF;
   const $ = (id) => document.getElementById(id);
   const root = document.documentElement;
 
@@ -404,6 +405,33 @@
       "</tbody>";
   }
 
+  function renderLtf() {
+    if (!L?.best_by_mode) { $("ltf").hidden = true; return; }
+    const name = { market: "直接進場（目前）", limit: "掛單等回檔", structure: "等 1h 結構突破" };
+    const label = (t) => t.label.replace("market", "下一根開盤").replace("limit zone", "掛在 OB/FVG").replace("limit ", "掛單 ")
+      .replace("structure ", "1h ").replace("1h-stop", "1h 止損").replace("4h-stop", "4h 止損");
+    const rows = ["market", "limit", "structure"].filter((m) => L.best_by_mode[m]).map((m) => [m, L.best_by_mode[m], L.median_by_mode[m]]);
+    const base = L.best_by_mode.market;
+    $("ltf-lede").textContent = `4h 訊號不變，改在 1h K 線上用不同方式進場，共測 ${L.n_variants} 種變化（掛單深度、等待時間、1h swing 長度、止損放法）。` +
+      `同樣只用 ${L.is_period} 挑選。結果沒有任何一種在樣本內或樣本外贏過直接進場（Sharpe ${fmt(base.is_sharpe, 2)} / ${fmt(base.oos_sharpe, 2)}）。下表是每一類裡樣本內最好的一種。`;
+    $("ltf-table").innerHTML = `<thead><tr><th>進場方式</th><th>最佳設定</th><th>樣本內 Sharpe</th><th>樣本外 Sharpe</th><th>同類中位數（內／外）</th>
+      <th>樣本外年化</th><th>樣本外回撤</th><th>勝率</th><th>平均每筆</th><th>成交率</th><th>止損（ATR）</th></tr></thead><tbody>` +
+      rows.map(([m, b, med], i) => `<tr${i === 0 ? ' style="font-weight:700"' : ""}><td>${name[m]}</td><td>${label(b)}</td>
+        <td>${fmt(b.is_sharpe, 2)}</td><td class="${cls(b.oos_sharpe)}">${fmt(b.oos_sharpe, 2)}</td><td>${fmt(med.is_sharpe, 2)}／${fmt(med.oos_sharpe, 2)}</td>
+        <td>${sgn(b.oos_cagr_pct, 1)}</td><td>${fmt(b.oos_max_dd_pct, 1)}%</td><td>${fmt(b.is_win_rate_pct, 0)}%</td>
+        <td>${sgn(b.is_avg_r, 2, "R")}</td><td>${fmt(b.is_fill_rate_pct, 0)}%</td><td>${fmt(b.is_avg_stop_atr, 2)}</td></tr>`).join("") + "</tbody>";
+    const a = (L.adverse_selection || []).find((x) => x.pullback_atr === 0.5);
+    $("ltf-note").textContent = (a ? `原因是逆向選擇：直接進場的交易中，8 小時內曾回檔 0.5 倍 ATR、掛單會成交的只有 ${fmt(a.would_fill_pct, 0)}%，` +
+      `這些交易平均 ${sgn(a.avg_r_filled, 2, "R")}；從不回頭的那些平均 ${sgn(a.avg_r_missed, 2, "R")}，貢獻了總獲利的 ${fmt(a.share_r_missed_pct, 0)}%。` +
+      `掛單只會買到比較弱的行情。` : "") +
+      (L.median_by_mode.limit?.is_avg_r != null ? `多數變化的每筆表現也變差：同類中位數勝率 ${fmt(L.median_by_mode.limit.is_win_rate_pct, 0)}%／${fmt(L.median_by_mode.structure.is_win_rate_pct, 0)}%、` +
+        `平均 ${sgn(L.median_by_mode.limit.is_avg_r, 2, "R")}／${sgn(L.median_by_mode.structure.is_avg_r, 2, "R")}（掛單／結構），直接進場是 ${fmt(base.is_win_rate_pct, 0)}%、${sgn(base.is_avg_r, 2, "R")}。` +
+        `各類最好的設定在樣本內只是接近直接進場（掛單 ${fmt(L.best_by_mode.limit.is_sharpe, 2)}、結構 ${fmt(L.best_by_mode.structure.is_sharpe, 2)}，對比 ${fmt(base.is_sharpe, 2)}），` +
+        `到樣本外差距反而拉大（${fmt(L.best_by_mode.limit.oos_sharpe, 2)}、${fmt(L.best_by_mode.structure.oos_sharpe, 2)}，對比 ${fmt(base.oos_sharpe, 2)}），多了複雜度卻沒有好處。` : "") +
+      "1h 止損比較近，同樣風險下部位較大，但也更容易被雜訊掃掉。這是趨勢跟隨策略的特性：獲利來自少數不回頭的大波段，追求更好的進場價反而會錯過它們。" +
+      "勝率、平均每筆、成交率、止損為樣本內數字。";
+  }
+
   function renderResearch() {
     if (!R) { $("res-lede").textContent = "找不到研究資料（docs/data/research.js），請執行 python scripts/research.py。"; $("robust").hidden = true; return; }
     $("res-lede").textContent = `共測試 ${R.n_configs} 組參數（週期、swing 長度、權重、門檻、多空方向、出場方式、止損方式），` +
@@ -612,6 +640,7 @@
   renderBacktest();
   renderResearch();
   renderRobust();
+  renderLtf();
   renderCompare();
   renderHistory();
   drawCharts();

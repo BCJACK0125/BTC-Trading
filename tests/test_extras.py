@@ -127,3 +127,36 @@ def test_leveraged_hold_and_dca():
     assert (three <= -1).any() and (1 + three).prod() == 0  # liquidated and stays dead
     d = compare.dca(daily)
     assert d["months"] == 7 and d["worst_vs_invested_pct"] <= d["return_on_invested_pct"]
+
+
+@pytest.fixture(scope="module")
+def hourly():
+    h1 = synthetic(12000, "1h", seed=5)
+    agg = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+    h4 = h1.resample("4h", label="right", closed="right").agg(agg).dropna()
+    d1 = h1.resample("1D", label="right", closed="right").agg(agg).dropna()
+    cfg = Config(swing_len=5, threshold=20, exit_mode="trail", sl_mode="atr")
+    f4, _ = signals.compute(h4, d1, cfg)
+    h1 = h1.loc[f4.index[0]:]
+    return f4, h1, cfg
+
+
+def test_ltf_entries_respect_rules(hourly):
+    from btc_signal import ltf
+    from btc_signal.ltf import EntryRule
+    f4, h1, cfg = hourly
+    feats = ltf.ltf_features(h1, 3)
+    sig_times = set(f4.index[f4["signal"] == 1])
+    market = ltf.run(f4, h1, feats, cfg, EntryRule("market"))
+    assert market["trades"] and market["metrics"]["fill_rate_pct"] == 100.0
+    for t in market["trades"]:
+        signal_bar = pd.Timestamp(t["entry_time"] - 3600, unit="s", tz="UTC")
+        assert signal_bar in sig_times          # entered on the 1h bar right after a 4h signal close
+    rule = EntryRule("limit", pullback_atr=0.5, window_h=8)
+    for t in ltf.run(f4, h1, feats, cfg, rule)["trades"]:
+        assert 1 <= t["wait_h"] <= rule.window_h
+        assert t["stop_atr"] < 2.0 + 1e-9     # stop stays at the 4h level, so it is closer to a lower fill
+    rule = EntryRule("structure", window_h=12, ltf_stop=True)
+    for t in ltf.run(f4, h1, feats, cfg, rule)["trades"]:
+        assert 2 <= t["wait_h"] <= rule.window_h + 1   # trigger confirmed on a later close, entered next open
+        assert rule.min_stop_atr - 1e-9 <= t["stop_atr"] <= rule.max_stop_atr + 1e-9
