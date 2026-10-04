@@ -22,6 +22,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      pages: ${{ steps.pages.outcome }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,8 +44,14 @@ jobs:
           key: klines-${{ github.run_id }}
           restore-keys: klines-
 
+      # Fails when Pages is not enabled (or the repo is private on a free plan). The signal,
+      # the cached signal log and notifications still work; only the deploy is skipped.
       - id: pages
         uses: actions/configure-pages@v5
+        continue-on-error: true
+
+      - if: steps.pages.outcome != 'success'
+        run: echo "::warning::GitHub Pages is not enabled for this repo, so the dashboard will not be deployed. Settings > Pages > Source = GitHub Actions (private repos need a paid plan)."
 
       - name: Compute signal
         env:
@@ -55,12 +63,14 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python scripts/update.py
 
-      - uses: actions/upload-pages-artifact@v3
+      - if: steps.pages.outcome == 'success'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: docs
 
   deploy:
     needs: build
+    if: needs.build.outputs.pages == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
