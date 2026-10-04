@@ -313,7 +313,9 @@
     $("cmp-lede").textContent = `${per.start} 到 ${per.end}。策略每筆只冒 1% 風險、平均部位只有 ${fmt(r1?.avg_lev, 2)} 倍，` +
       `大部分時間空手；買入持有則是 100% 一直在場。直接比報酬會低估策略，只看 Sharpe 又會高估它。` +
       `公平的比法是在同樣的回撤下比報酬，或把兩邊都放大到同樣的槓桿。` +
-      (hold1 ? `這段期間買入持有年化 ${sgn(hold1.cagr_pct, 1)}、最大回撤 ${fmt(hold1.max_dd_pct, 1)}%。` : "");
+      (hold1 ? `這段期間買入持有年化 ${sgn(hold1.cagr_pct, 1)}、最大回撤 ${fmt(hold1.max_dd_pct, 1)}%。` : "") +
+      `不論選哪個起點，策略都是同一組參數（只用 ${D.backtest.is.start.slice(0, 4)}–${D.backtest.is.end.slice(0, 4)} 的資料挑選），切換只改變比較從哪天開始算；` +
+      `${D.backtest.oos.start} 以後的起點全部是樣本外。`;
 
     // equal drawdown: metric rows x (hold, matched strategy) column pairs
     const M = per.matched;
@@ -404,7 +406,12 @@
     if (!wf.years) { $("wf-lede").textContent = ""; return; }
     $("wf-lede").textContent = `每年年初只用之前的資料、用同一套規則重新挑參數，然後實際交易一年，再把各年接起來（${wf.period}）。` +
       `這測的是「挑參數的方法」本身，而不只是某一組參數：接起來的年化 ${sgn(wf.stitched.cagr_pct, 1)}、Sharpe ${fmt(wf.stitched.sharpe, 2)}；` +
-      `同期間固定用目前參數為 ${sgn(wf.prod.cagr_pct, 1)}／${fmt(wf.prod.sharpe, 2)}，買入持有 ${sgn(wf.buy_hold.cagr_pct, 1)}／${fmt(wf.buy_hold.sharpe, 2)}（最大回撤 ${fmt(wf.buy_hold.max_dd_pct, 0)}%）。`;
+      `同期間固定用目前參數為 ${sgn(wf.prod.cagr_pct, 1)}／${fmt(wf.prod.sharpe, 2)}，買入持有 ${sgn(wf.buy_hold.cagr_pct, 1)}／${fmt(wf.buy_hold.sharpe, 2)}（最大回撤 ${fmt(wf.buy_hold.max_dd_pct, 0)}%）。` +
+      (() => {
+        const last = wf.years[wf.years.length - 1];
+        return `每年重挑沒有比固定參數好，所以實盤參數不會自動更新，只在每年 1 月例行檢視一次。最後一列（${last.year}）就是用到 ${last.year - 1} 年底的資料重挑的結果，` +
+          (last.same_as_prod ? "和目前參數相同，因此不需要更換。" : "和目前參數不同，換不換依 README 的「參數更新規則」決定。");
+      })();
     $("wf-table").innerHTML = `<caption class="note" style="caption-side:bottom;text-align:left;padding-top:8px">* 目前參數是用 2019–2023 挑出的，2024 年以前屬於樣本內，僅供對照。</caption><thead><tr><th>測試年</th><th>訓練資料</th><th>當年選出的參數</th><th>報酬</th><th>Sharpe</th><th>最大回撤</th><th>目前參數</th><th>買入持有</th></tr></thead><tbody>` +
       wf.years.map((y) => `<tr><td>${y.year}${y.partial ? "（至今）" : ""}</td><td>${y.train}</td><td>${paramText(y.params)}</td>
         <td class="${cls(y.return_pct)}">${sgn(y.return_pct, 1)}</td><td>${fmt(y.sharpe, 2)}</td><td>${fmt(y.max_dd_pct, 1)}%</td>
