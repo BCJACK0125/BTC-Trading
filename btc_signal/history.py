@@ -59,3 +59,15 @@ def record(history: list[dict], entry: dict) -> tuple[list[dict], dict | None, b
     changed = prev is not None and prev.get("action") != entry["action"]
     already_sent = same_bar is not None and same_bar.get("action") == entry["action"]
     return merge(history, [entry]), prev, changed and not already_sent
+
+
+def tp1_reached(history: list[dict], entry: dict) -> bool:
+    """True on the first bar where the open position has taken TP1, unless this bar
+    was already published with TP1 taken (so a re-run does not notify twice)."""
+    if entry.get("action") != "IN_POSITION" or not entry.get("tp1_hit"):
+        return False
+    prev = next((e for e in reversed(history) if e["bar"] < entry["bar"]), None)
+    same_bar = next((e for e in history if e["bar"] == entry["bar"]), None)
+    was_hit = bool(prev and prev.get("action") == "IN_POSITION" and prev.get("tp1_hit"))
+    sent = bool(same_bar and same_bar.get("tp1_hit"))
+    return prev is not None and not was_hit and not sent

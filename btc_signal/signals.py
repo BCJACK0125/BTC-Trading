@@ -150,10 +150,6 @@ def trade_plan(row: pd.Series, side: int, cfg: Config) -> dict:
     # nearest opposing liquidity (zone / swing) as a reality check for TP2
     target = row["near_bear_zone"] if side == 1 else row["near_bull_zone"]
     plan["liquidity_target"] = None if np.isnan(target) else float(target)
-    # a pullback entry: the nearest supporting zone, if close to price
-    support = row["near_bull_zone"] if side == 1 else row["near_bear_zone"]
-    if not np.isnan(support) and abs(entry - support) < 1.5 * row["atr"]:
-        plan["pullback_entry"] = float(support)
-    else:
-        plan["pullback_entry"] = None
+    # no pullback-entry level on purpose: waiting for a pullback lost money in
+    # scripts/ltf_research.py (the trades that never pull back carry the edge)
     return plan

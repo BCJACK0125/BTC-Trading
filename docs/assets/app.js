@@ -101,7 +101,6 @@
       { k: "tp", label: `TP1 ${cfg.tp1_r}R 平一半`, px: P.tp1 },
       { k: "tp", label: `${cfg.tp2_r}R 參考`, px: P.tp2 },
     ];
-    if (P.pullback_entry) lv.push({ k: "pull", label: "回測支撐區", px: P.pullback_entry });
     return { entry: P.entry, R: P.entry - P.stop, lv };
   }
 
@@ -140,7 +139,7 @@
     if (POS) {
       sub = `系統 ${dateStr(POS.entry_time - D.chart.bar_seconds)} 進場，已持有 ${POS.bars} 根 K 線，目前 ${sgn(POS.r_now, 2, "R")}。`;
     } else if (S.action === "ENTER_LONG") {
-      sub = "訊號成立：下一根 4h K 線開盤進場" + (P.pullback_entry ? `，或掛單在回測支撐 ${fmt(P.pullback_entry)} 附近。` : "。");
+      sub = "訊號成立：這根 4h K 線開盤後盡快市價進場，步驟見下方。不建議掛低等回檔（見「參數研究」的 1 小時進場測試）。";
     } else if (S.action === "COOLDOWN") {
       sub = "分數已達門檻，但仍在出場後的冷卻期。以下是冷卻結束後若條件仍成立的參考價位。";
     } else {
@@ -158,6 +157,9 @@
       `止損距離 ${fmt(P.risk_pct, 2)}%（${cfg.sl_atr} 倍 ATR，ATR 約 ${fmt(P.atr)}）`];
     if (P.liquidity_target) rules.push(`上方最近的空方區在 ${fmt(P.liquidity_target)}，可能形成壓力。`);
     $("rules").innerHTML = rules.filter(Boolean).map((r) => `<li>${r}</li>`).join("");
+    $("steps").innerHTML = (S.steps || []).map((s) => `<li>${s}</li>`).join("");
+    $("notify-hint").textContent = "怎麼知道訊號到了：網頁約在每根 4h K 線收盤後 10–30 分鐘更新；設定 Email／Telegram／Discord 後，" +
+      "狀態改變時會直接收到同樣的步驟（設定見 README）。價位以系統計算為準，時間為台灣時間。";
     renderCalc();
   }
 
@@ -226,7 +228,7 @@
   function renderBacktest() {
     const B = D.backtest, oos = B.oos, is = B.is;
     const bh = R?.baselines || {};
-    $("bt-lede").textContent = `${B.full.start} 到 ${B.full.end}，每筆交易風險 1% 資金（最高 0.82 倍部位，可用現貨執行，不含資金費率），含手續費與滑價。槓桿與資金費率的影響見下方「公平比較」。` +
+    $("bt-lede").textContent = `${B.full.start} 到 ${B.full.end}，每筆交易風險 1% 資金（保守的示範值，不是最佳化結果；最高 0.82 倍部位，可用現貨執行，不含資金費率），含手續費與滑價。槓桿與資金費率的影響見下方「公平比較」。` +
       `參數只用 ${is.start}～${is.end} 挑選，${oos.start} 之後是沒看過的樣本外資料。`;
     const kpi = (v, k, c) => `<div class="kpi"><div class="v">${v}</div><div class="k">${k}</div><div class="c">${c}</div></div>`;
     $("kpis").innerHTML =
@@ -334,7 +336,11 @@
     const fa = D.compare.funding_avg_annual_pct;
     $("risk-note").textContent = `槓桿由「每筆風險 ÷ 止損距離」決定，不是另外設定的。以永續合約執行時，持倉每 8 小時支付實際歷史資金費率` +
       (fa != null ? `（2019 年以來平均每年約 ${fmt(fa, 1)}% 的名目部位）` : "") +
-      `。風險 1% 時最高槓桿不到 1 倍，可以直接用現貨，不必付資金費率，看「未扣資金費率」那欄即可。報酬與回撤大致隨風險等比例放大，但蒙地卡羅的最差情況放大得更快。`;
+      `。風險 1% 時最高槓桿不到 1 倍，可以直接用現貨，不必付資金費率，看「未扣資金費率」那欄即可。報酬與回撤大致隨風險等比例放大，但蒙地卡羅的最差情況放大得更快。` +
+      `全頁預設的 1% 是保守的示範值，不是最佳化的結果：Sharpe 不隨風險改變，所以沒有「最佳」的風險，只有你能承受多深的回撤。` +
+      (D.compare.kelly_risk_pct != null ? `理論上讓長期複利最快的 Kelly 比例約為每筆 ${fmt(D.compare.kelly_risk_pct, 0)}%，但它假設回測的勝率和賠率完全準確，` +
+        `實務上常用 1/4 到 1/2 Kelly 以下，而且槓桿、跳空和資金費率都會讓實際回撤更深。` : "") +
+      `建議先看「蒙地卡羅最差 5%」那欄，選一個你真的撐得住的回撤，再決定風險。`;
 
     const D_ = per.dca;
     $("hold-table").innerHTML = `<thead><tr><th></th><th>年化</th><th>總報酬</th><th>最大回撤</th><th>Sharpe</th></tr></thead><tbody>` +

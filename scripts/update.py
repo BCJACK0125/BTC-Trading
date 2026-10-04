@@ -212,9 +212,11 @@ def main():
         },
         "compare": {
             "funding_avg_annual_pct": round(float(funding_hist.mean() * 3 * 365 * 100), 1) if len(funding_hist) else None,
+            "kelly_risk_pct": kelly_risk_pct([t["r"] for t in bt["trades"]]),
             "periods": comparisons,
         },
     }
+    out["signal"]["steps"] = order_steps(out, cfg, bt["trades"])
     OUT.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"), default=_json_default)
     OUT.write_text(payload, encoding="utf-8")
@@ -230,33 +232,85 @@ def history_entry(out: dict, trades: list[dict]) -> dict:
     e = {"bar": out["last_bar_close"], "generated": out["generated_at"], "action": out["signal"]["action"],
          "label": out["signal"]["label"], "score": out["signal"]["score"], "price": out["price"],
          "stop": pos["stop"] if pos else out["plan"]["stop"], "tp1": pos["tp1"] if pos else out["plan"]["tp1"]}
-    closed = [t for t in trades if t["exit_time"] == out["last_bar_close"]]
+    if pos:
+        e["tp1_hit"] = bool(pos["tp1_hit"])
+    closed = closed_now(out, trades)
     if closed:
-        e["closed"] = {k: closed[-1][k] for k in ("entry", "exit", "r", "reason")}
+        e["closed"] = {k: closed[k] for k in ("entry", "exit", "r", "reason")}
     return e
 
 
-REASON = {"stop": "止損", "breakeven": "保本出場", "trail": "移動停損", "target": "止盈", "time": "時間到"}
+def closed_now(out: dict, trades: list[dict]) -> dict | None:
+    closed = [t for t in trades if t["exit_time"] == out["last_bar_close"]]
+    return closed[-1] if closed else None
 
 
-def notify_text(out: dict, e: dict, prev: dict | None, site_url: str) -> str:
-    t = pd.Timestamp(e["bar"], unit="s", tz="UTC").strftime("%Y-%m-%d %H:%M UTC")
-    lines = [f"BTC 訊號台｜{e['label']}",
-             f"{out['timeframe']} 收盤 {t}，價格 {e['price']:,.0f}，分數 {e['score']:.1f}"
-             + (f"（前一根：{prev['label']}）" if prev else "")]
-    if e["action"] == "ENTER_LONG":
-        p = out["plan"]
-        lines.append(f"下一根開盤做多。止損 {p['stop']:,.0f}（-{p['risk_pct']:.2f}%），TP1 {p['tp1']:,.0f} 平一半")
-    elif e["action"] == "IN_POSITION":
-        lines.append(f"持倉止損 {e['stop']:,.0f}，TP1 {e['tp1']:,.0f}")
-    if e.get("closed"):
-        c = e["closed"]
-        lines.append(f"上一筆交易出場：{c['r']:+.2f}R（{REASON.get(c['reason'], c['reason'])}，"
-                     f"{c['entry']:,.0f} → {c['exit']:,.0f}）")
-    lines.append(out["signal"]["summary"])
+def kelly_risk_pct(rs: list[float]) -> float | None:
+    """Risk per trade that maximises long-run growth given the backtest's R multiples (full Kelly)."""
+    r = np.asarray(rs, dtype=float)
+    if len(r) < 20:
+        return None
+    grid = np.linspace(0.001, 0.6, 600)
+    growth = [np.mean(np.log1p(np.maximum(f * r, -0.999))) for f in grid]
+    return round(float(grid[int(np.argmax(growth))]) * 100, 1)
+
+
+def local_time(sec: int) -> str:
+    return pd.Timestamp(sec, unit="s", tz="UTC").tz_convert("Asia/Taipei").strftime("%m/%d %H:%M")
+
+
+def order_steps(out: dict, cfg: Config, trades: list[dict]) -> list[str]:
+    """What to actually do at the exchange right now; shown on the page and sent in
+    notifications. Times are Taiwan time (UTC+8)."""
+    a, p, pos, bar = out["signal"]["action"], out["plan"], out["position"], out["chart"]["bar_seconds"]
+    steps = []
+    closed = closed_now(out, trades)
+    if closed:
+        how = {"stop": "止損觸發", "breakeven": "保本止損觸發", "trail": "移動停損觸發", "time": "持有時間到", "target": "止盈"}
+        steps.append(f"系統這根 K 線已出場（{how.get(closed['reason'], closed['reason'])}，{closed['exit']:,.0f}，"
+                     f"{closed['r']:+.2f}R）。止損單已觸發就不用動作；若是持有時間到，或你的止損沒有跟上，請市價平掉剩餘部位。")
+    if a == "ENTER_LONG":
+        d = p["entry"] - p["stop"]
+        steps += [
+            f"{local_time(out['last_bar_close'])}（台灣時間）這根 4h K 線已開盤，盡快以市價買入，或掛比現價高約 0.1% 的限價單確保成交。"
+            "不要掛低等回檔：研究顯示會錯過最賺錢的交易；晚 1 小時進場平均只差約 0.03R。",
+            f"數量＝帳戶資金 × 每筆風險 ÷ {d:,.0f}（止損距離，USDT）。例：1 萬 USDT、風險 1% → {100 / d:.4f} BTC。",
+            f"成交後立刻掛「停損市價單」賣出全部，觸發價 {p['stop']:,.0f}。成交價和 {p['entry']:,.0f} 不同時，觸發價改為成交價 − {d:,.0f}。",
+            f"同時掛「限價賣單」一半數量（勾選只減倉 / reduce-only）在 {p['tp1']:,.0f}（{cfg.tp1_r:g}R）。",
+            "TP1 成交後，把停損改到你的進場價（保本），屆時會另外通知。",
+            f"之後每根 4h K 線收盤，把停損上移到「最高價 − {cfg.trail_atr:g}×ATR」，只上移不下移；本頁「交易計畫」顯示最新數字。",
+            f"若到 {local_time(out['last_bar_close'] + (cfg.max_bars + 1) * bar)} 仍未出場，市價平掉剩餘部位。",
+        ]
+    elif a == "IN_POSITION" and pos:
+        steps.append(f"止損應設在 {pos['stop']:,.0f}（{'移動停損' if pos['tp1_hit'] else '初始止損'}），只上移不下移。")
+        if pos["tp1_hit"]:
+            steps.append(f"TP1 已到並平掉一半；剩下一半用移動停損，每根 4h 收盤後上移到「最高價 − {cfg.trail_atr:g}×ATR」。")
+        else:
+            steps.append(f"TP1 限價賣單（一半，只減倉）在 {pos['tp1']:,.0f}；成交後把止損移到進場價 {pos['entry']:,.0f}。")
+        steps.append(f"若到 {local_time(pos['entry_time'] + cfg.max_bars * bar)} 仍未出場，市價平掉剩餘部位。")
+        steps.append(f"以上以系統進場價 {pos['entry']:,.0f} 計算；你的成交價不同時，止損距離維持一樣。")
+    elif not closed:
+        steps.append("目前不需要下單。" + ("冷卻結束後條件仍成立會發出進場通知。" if a == "COOLDOWN" else "訊號成立時會發出通知。"))
+    return steps
+
+
+def notify_message(out: dict, e: dict, prev: dict | None, site_url: str, tp1_only: bool = False) -> tuple[str, str]:
+    """(subject, body) for a state change or a TP1 fill."""
+    if tp1_only:
+        title = "TP1 已到，止損移到保本"
+    elif e.get("closed") and e["action"] != "IN_POSITION":
+        title = f"已出場 {e['closed']['r']:+.2f}R，現在：{e['label']}"
+    else:
+        title = e["label"]
+    lines = [f"BTC 訊號台｜{title}",
+             f"{out['timeframe']} K 線 {local_time(e['bar'])}（台灣時間）收盤，價格 {e['price']:,.0f}，分數 {e['score']:.1f}"
+             + (f"（前一根：{prev['label']}）" if prev and not tp1_only else ""),
+             "", out["signal"]["summary"], "", "要做的事："]
+    lines += [f"{i}. {s}" for i, s in enumerate(out["signal"]["steps"], 1)]
     if site_url:
-        lines.append(site_url)
-    return "\n".join(lines)
+        lines += ["", site_url]
+    lines += ["", "本通知僅供研究參考，不構成投資建議。"]
+    return f"【BTC 訊號台】{title}｜{e['price']:,.0f}", "\n".join(lines)
 
 
 def update_history(out: dict, trades: list[dict], cache: Path, site_url: str):
@@ -266,6 +320,7 @@ def update_history(out: dict, trades: list[dict], cache: Path, site_url: str):
     remote = history.read_url(site_url.rstrip("/") + "/data/history.json") if site_url else []
     hist = history.merge(remote, history.read_file(cache / "history.json"), history.read_file(local))
     e = history_entry(out, trades)
+    tp1 = history.tp1_reached(hist, e)
     hist, prev, changed = history.record(hist, e)
     payload = json.dumps(hist, ensure_ascii=False, separators=(",", ":"), default=_json_default)
     for path in (local, cache / "history.json"):
@@ -273,8 +328,9 @@ def update_history(out: dict, trades: list[dict], cache: Path, site_url: str):
         path.write_text(payload, encoding="utf-8")
     local.with_suffix(".js").write_text(f"window.BTC_HISTORY={payload};", encoding="utf-8")
     print(f"history: {len(hist)} entries ({len(remote)} from site)" + (f", changed from {prev['action']}" if changed else ""))
-    if changed and notify.channels():
-        print("notified:", notify.send(notify_text(out, e, prev, site_url)) or "failed")
+    if (changed or tp1) and notify.channels():
+        subject, body = notify_message(out, e, prev, site_url, tp1_only=not changed)
+        print("notified:", notify.send(body, subject) or "failed")
 
 
 def _json_default(o):

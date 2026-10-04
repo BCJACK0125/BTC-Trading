@@ -45,7 +45,13 @@
       <h2 id="ticket-title">交易計畫</h2>
       <p class="ticket-sub" id="ticket-sub"></p>
       <div class="ladder" id="ladder"></div>
-      <ul class="rules" id="rules"></ul>
+      <h3 class="ticket-h">現在要做的事</h3>
+      <ol class="steps" id="steps"></ol>
+      <p class="ticket-sub" id="notify-hint"></p>
+      <details class="calc">
+        <summary>出場規則</summary>
+        <ul class="rules" id="rules"></ul>
+      </details>
       <details class="calc" open>
         <summary>倉位計算</summary>
         <div class="calc-grid">
@@ -184,7 +190,9 @@
         <h3>資料</h3>
         <p>K 線來自 Binance 公開行情 API（OKX 備援），恐懼貪婪指數來自 alternative.me，資金費率來自 Binance／OKX 永續合約。數值已與 TradingView 上的 BINANCE:BTCUSDT 核對一致。</p>
         <h3>更新</h3>
-        <p>GitHub Actions 在每根 4h K 線收盤後約 10 分鐘執行（UTC 0、4、8、12、16、20 點）。頁面上的即時價格每 15 秒直接向交易所查詢。</p>
+        <p>GitHub Actions 在每根 4h K 線收盤後約 10–30 分鐘執行（台灣時間 0、4、8、12、16、20 點收盤；GitHub 的排程常會晚幾分鐘）。頁面上的即時價格每 15 秒直接向交易所查詢。</p>
+        <h3>通知</h3>
+        <p>狀態改變（出現進場訊號、系統進場、TP1 到價、出場）時，可以用 Email、Telegram 或 Discord 收到通知，內容和上方「現在要做的事」相同。設定方式見 README 的「推播通知」：在 GitHub repo 的 Secrets 填入帳號即可，不需要伺服器。</p>
       </div>
       <div>
         <h3>限制</h3>

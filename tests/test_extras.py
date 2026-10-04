@@ -187,3 +187,61 @@ def test_flow_features_no_lookahead():
     f = pd.DataFrame({"signal": [1, 1, 1, 0]})
     g = flows.with_filter(f, pd.Series([True, False, np.nan, True]))
     assert g["signal"].tolist() == [1, 0, 1, 0]             # missing data never blocks a signal
+
+
+def test_email_channel_and_message(monkeypatch):
+    from btc_signal import notify
+    for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DISCORD_WEBHOOK_URL", "SMTP_USER", "SMTP_PASSWORD", "EMAIL_TO"):
+        monkeypatch.delenv(k, raising=False)
+    assert notify.channels() == []
+    monkeypatch.setenv("SMTP_USER", "bot@example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "app-password")
+    monkeypatch.setenv("EMAIL_TO", "a@example.com, b@example.com")
+    assert notify.channels() == ["email"]
+    msg = notify.build_email("【BTC 訊號台】進場做多", "1. 市價買入")
+    assert msg["To"] == "a@example.com, b@example.com" and "bot@example.com" in msg["From"]
+    assert "市價買入" in msg.get_content()
+
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, host, port, **kw):
+            sent.append((host, port))
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def login(self, user, pw):
+            assert (user, pw) == ("bot@example.com", "app-password")
+        def send_message(self, m):
+            sent.append(m["Subject"])
+
+    monkeypatch.setattr(notify.smtplib, "SMTP_SSL", FakeSMTP)
+    assert notify.send("body", "subject") == ["email"]
+    assert sent == [("smtp.gmail.com", 465), "subject"]
+
+
+def test_tp1_notification_once():
+    h = [{"bar": 1, "action": "IN_POSITION", "tp1_hit": False, "generated": "a"}]
+    hit = {"bar": 2, "action": "IN_POSITION", "tp1_hit": True, "generated": "b"}
+    assert history.tp1_reached(h, hit)
+    h2, _, _ = history.record(h, hit)
+    assert not history.tp1_reached(h2, dict(hit, generated="c"))           # same bar re-run
+    assert not history.tp1_reached(h2, {"bar": 3, "action": "IN_POSITION", "tp1_hit": True})  # already taken
+
+
+def test_order_steps_follow_the_state():
+    cfg = Config()
+    base = {"last_bar_close": 1_790_000_000, "chart": {"bar_seconds": 14400},
+            "plan": {"entry": 100_000.0, "stop": 97_000.0, "tp1": 104_500.0}, "position": None}
+    enter = update.order_steps({**base, "signal": {"action": "ENTER_LONG"}}, cfg, [])
+    text = " ".join(enter)
+    assert "97,000" in text and "104,500" in text and "3,000" in text   # stop, TP1 and stop distance
+    pos = {"entry": 100_000.0, "stop": 101_000.0, "tp1": 104_500.0, "tp1_hit": True, "entry_time": 1_789_000_000}
+    held = update.order_steps({**base, "position": pos, "signal": {"action": "IN_POSITION"}}, cfg, [])
+    assert "101,000" in held[0] and "移動停損" in held[0]
+    idle = update.order_steps({**base, "signal": {"action": "WAIT"}}, cfg, [])
+    assert idle == ["目前不需要下單。訊號成立時會發出通知。"]
+    exited = update.order_steps({**base, "signal": {"action": "COOLDOWN"}}, cfg,
+                                [{"exit_time": base["last_bar_close"], "exit": 99_000.0, "r": -0.33, "reason": "time"}])
+    assert "已出場" in exited[0] and len(exited) == 1

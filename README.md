@@ -45,6 +45,8 @@ SMC 偵測（`btc_signal/smc.py`）用 TradingView MCP 對照過 LuxAlgo「Smart
 
 864 組參數（週期 1h/4h、swing 長度、權重、門檻、多空、出場方式、止損方式）只用 2019–2023 挑選，2024 年之後當樣本外測試。每筆風險 1%，含 0.05% 手續費與 0.02% 滑價。
 
+1% 是保守的示範值，不是最佳化的結果。Sharpe 不隨風險改變，所以沒有「最佳」的風險，只有你能承受多深的回撤。理論上讓長期複利最快的 Kelly 比例約為每筆 22%，但它假設回測的勝率和賠率完全準確，實務上常用 1/4 到 1/2 Kelly 以下。各風險下的報酬、回撤與蒙地卡羅最差情況，見儀表板的「公平比較」。
+
 | | 樣本內 2019–2023 | 樣本外 2024–2026/10 | 買入持有（樣本外） |
 |---|---|---|---|
 | 年化報酬 | 10.4% | 12.0% | 28.8% |
@@ -138,14 +140,30 @@ Walk-forward 每年都選到「4h、swing 5、只做多、移動停損、ATR 止
 
 **訊號紀錄**：每次更新會把當下發布的狀態寫進 `docs/data/history.json`，儀表板的「訊號紀錄」區塊顯示狀態變化與出場結果。這是上線後的真實前測紀錄，不是回測重算。GitHub runner 每次都是乾淨環境，所以腳本會先從已部署的網站（`SITE_URL`）和快取取回舊紀錄再合併。
 
-**推播通知（選用）**：狀態改變時（例如「等待」→「進場做多」、持倉出場）發送通知。在 repo → Settings → Secrets and variables → Actions 新增：
+**推播通知（選用）**：以下情況會發送通知，內容是儀表板上「現在要做的事」的同一份下單步驟（價位、數量公式、停損與 TP1 掛單、時間停損日期）：
+- 出現進場訊號（例如「等待」→「進場做多」）
+- 系統進場（→「持倉中」，附目前止損與 TP1）
+- TP1 到價（提醒把止損移到保本）
+- 出場（附結果與原因）
 
-| Secret | 說明 |
-|---|---|
-| `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID` | 用 @BotFather 建立 bot，chat id 可從 `getUpdates` 取得 |
-| `DISCORD_WEBHOOK_URL` | 頻道設定 → 整合 → Webhook |
+同一根 K 線重跑不會重複發送。設定方式：在 repo → Settings → Secrets and variables → Actions → New repository secret 新增下表任一組，填了哪組就用哪個管道：
 
-本機測試：設定環境變數後執行 `python -m btc_signal.notify "測試"`。沒設定就不發送，不影響更新。
+| 管道 | Secret | 說明 |
+|---|---|---|
+| Email | `SMTP_USER`、`SMTP_PASSWORD`、`EMAIL_TO` | 見下方 Gmail 設定。`EMAIL_TO` 可填多個，用逗號分隔 |
+| Email（非 Gmail） | 再加 `SMTP_HOST`、`SMTP_PORT` | 預設 `smtp.gmail.com`、`465`（SSL）；587 會用 STARTTLS |
+| Telegram | `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID` | 用 @BotFather 建立 bot，chat id 可從 `getUpdates` 取得 |
+| Discord | `DISCORD_WEBHOOK_URL` | 頻道設定 → 整合 → Webhook |
+
+**Gmail 設定**（建議另外開一個寄信專用的 Gmail）：
+1. Google 帳戶 → 安全性 → 開啟「兩步驟驗證」。
+2. 到 https://myaccount.google.com/apppasswords 建立一組「應用程式密碼」（16 個字元）。
+3. GitHub Secrets 填入 `SMTP_USER`＝這個 Gmail 地址、`SMTP_PASSWORD`＝剛剛的應用程式密碼（不是 Gmail 登入密碼）、`EMAIL_TO`＝要收信的地址。
+4. 到 Actions 手動執行一次 workflow 確認沒有錯誤。下一次狀態改變時就會收到信。
+
+本機測試：設定同樣的環境變數後執行 `python -m btc_signal.notify "測試"`。沒設定就不發送，也不影響更新。
+
+**時間差**：GitHub 的排程通常在 4h 收盤後 10–30 分鐘才執行，所以通知會比回測假設的「下一根開盤」晚一點。用 1h 資料估算，晚 1 小時進場平均只少約 0.03R（每筆平均獲利約 0.45R）。
 
 **啟用 GitHub Pages**：repo → Settings → Pages → Source 選「GitHub Actions」，然後到 Actions 手動執行一次「Update signal & deploy dashboard」。私人 repo 使用 Pages 需要付費方案。
 
