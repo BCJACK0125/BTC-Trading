@@ -356,6 +356,36 @@
       `和一次投入的年化不能直接相比；期間投入資金最深曾虧 ${fmt(D_.worst_vs_invested_pct, 1)}%。`;
   }
 
+  // ---- OKX demo account mirroring the signal ------------------------------------------
+  function renderPaper() {
+    const J = window.BTC_PAPER;
+    if (!J || !J.updated) {
+      $("paper-lede").textContent = "尚未啟用。在 GitHub repo 的 Secrets 填入 OKX 模擬交易的 API Key（OKX_API_KEY、OKX_SECRET_KEY、OKX_PASSPHRASE）後，" +
+        "每根 4h K 線收盤後會自動照訊號在 OKX 模擬盤下單，這裡會顯示帳戶權益、部位和每次動作。設定方式見 README。";
+      return;
+    }
+    const curve = J.equity_curve || [];
+    const first = curve.length ? curve[0][1] : null;
+    const change = first ? (J.equity / first - 1) * 100 : null;
+    const p = J.position;
+    $("paper-stats").textContent = `${J.inst}・每筆風險 ${fmt(J.risk_pct, 1)}%・逐倉最高 ${fmt(J.max_lev, 0)} 倍・更新於 ${dateStr(Date.parse(J.updated) / 1000)}`;
+    $("paper-lede").textContent = "每根 4h K 線收盤後，程式讀取和本頁相同的訊號，在 OKX 模擬盤（虛擬資金）照「現在要做的事」下單：市價進場、掛全部止損與一半 TP1、" +
+      "TP1 後止損移到保本並跟著移動停損上移、系統出場時平倉。不追價：訊號超過 2 小時或錯過進場就不補。目的是驗證實際成交與掛單流程，和上方的訊號紀錄、回測對照。";
+    const kpi = (v, k, c) => `<div class="kpi"><div class="v">${v}</div><div class="k">${k}</div><div class="c">${c}</div></div>`;
+    $("paper-kpis").innerHTML =
+      kpi(`${fmt(J.equity, 0)}`, "模擬帳戶權益（USDT）", change == null ? "" : `自 ${dateStr(curve[0][0], false)} 起 ${sgn(change, 2)}`) +
+      kpi(p ? `${fmt(p.contracts, 2)} 口` : "空手", "目前部位", p ? `均價 ${fmt(p.avg_px, 1)}（${fmt(p.contracts * 0.01, 4)} BTC）` : "") +
+      kpi(J.stop ? fmt(J.stop, 1) : "—", "止損單", J.tp1_pending ? "TP1 限價單掛單中" : (p ? "TP1 已成交或未掛" : "")) +
+      kpi(String((J.log || []).filter((r) => r.action === "enter").length), "累計進場次數", `${(J.log || []).filter((r) => r.action === "error").length} 次錯誤`);
+    const name = { enter: "進場", close: "平倉", place_sl: "補掛止損", amend_sl: "止損上移", place_tp1: "補掛 TP1",
+      cancel_algo: "清理", cancel_order: "清理", note: "說明", error: "錯誤" };
+    const rows = (J.log || []).slice(-30).reverse();
+    $("paper-log").innerHTML = `<thead><tr><th>時間</th><th>動作</th><th style="text-align:left">內容</th></tr></thead><tbody>` +
+      (rows.length ? rows.map((r) => `<tr><td>${dateStr(Date.parse(r.time) / 1000)}</td><td>${name[r.action] || r.action}</td>
+        <td style="white-space:normal;text-align:left">${r.detail || ""}</td></tr>`).join("")
+        : `<tr><td colspan="3" style="text-align:left;color:var(--muted)">還沒有動作；等下一次訊號。</td></tr>`) + "</tbody>";
+  }
+
   // ---- forward signal log ---------------------------------------------------------
   const TONE = { ENTER_LONG: "go", IN_POSITION: "hold", WATCH: "watch", COOLDOWN: "watch" };
   const REASON = { stop: "止損", breakeven: "保本出場", trail: "移動停損", target: "止盈", time: "時間到" };
@@ -708,6 +738,7 @@
   renderOi();
   renderCompare();
   renderHistory();
+  renderPaper();
   drawCharts();
   poll();
   setInterval(poll, 15000);

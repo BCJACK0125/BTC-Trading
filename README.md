@@ -17,6 +17,7 @@ python scripts/research.py    # 重跑參數研究與過度擬合檢驗（約 2 
 python scripts/ltf_research.py  # 1h 進場方式研究（約 1 分鐘）
 python scripts/flow_research.py # Coinbase 溢價與資金費率研究（首次下載 Coinbase 資料約 2 分鐘）
 python scripts/oi_research.py   # 爆倉／槓桿擠壓研究（首次下載未平倉量資料約 1 分鐘）
+python scripts/okx_paper.py --dry-run  # 選用：讀取 OKX 模擬帳戶並列出要做的動作（需 OKX 模擬交易 API Key）
 python -m pytest -q tests     # 測試（含「不偷看未來資料」檢查）
 python -m btc_signal.notify "測試"  # 選用：測試 Telegram / Discord 推播設定
 ```
@@ -196,6 +197,22 @@ Walk-forward 每年都選到「4h、swing 5、只做多、移動停損、ATR 止
 
 **時間差**：GitHub 的排程通常在 4h 收盤後 10–30 分鐘才執行，所以通知會比回測假設的「下一根開盤」晚一點。用 1h 資料估算，晚 1 小時進場平均只少約 0.03R（每筆平均獲利約 0.45R）。
 
+**OKX 模擬交易（選用）**：`scripts/okx_paper.py` 在每次更新後，照同一份訊號在 OKX 模擬盤（虛擬資金）下單，商品是 BTC-USDT-SWAP、逐倉。目的是在不用真錢的情況下，驗證實際成交、手續費與掛單流程。結果顯示在儀表板「模擬交易」區塊（`docs/data/paper.json`）。
+
+- 進場訊號 → 市價買入。數量讓止損剛好虧 `RISK_PCT`% 的權益（預設 1%），最高 3 倍。接著掛「觸發後平掉全部」的止損，以及一半數量的 TP1 只減倉限價單。
+- TP1 成交 → 止損移到成交均價（保本），之後跟著系統的移動停損上移，只上移不下移。
+- 系統出場（止損、移動停損或持有時間到）→ 平掉剩餘部位。
+- 不追價：進場訊號超過 2 小時，或系統持倉但模擬帳戶沒有部位時，只記錄、不下單。同一根 K 線重跑不會重複下單。
+- 程式只會連到模擬盤（每個請求都帶 `x-simulated-trading: 1`），沒辦法用它交易真實帳戶。
+
+設定：
+1. OKX → 交易 → 模擬交易 → 個人中心 → 模擬交易 API → 建立 API Key。權限只勾「讀取」與「交易」（不要勾「提現」），設定 Passphrase。
+2. 模擬交易的帳戶模式要是「單幣種保證金」以上（現貨模式不能交易永續合約）。程式偵測到現貨模式時會停下來並提示。
+3. GitHub repo → Settings → Secrets and variables → Actions，新增 `OKX_API_KEY`、`OKX_SECRET_KEY`、`OKX_PASSPHRASE`。想改每筆風險，就在同一頁的 Variables 新增 `PAPER_RISK_PCT`（例如 `0.5`）。
+4. 到 Actions 手動執行一次，看「Paper trade (OKX demo)」這一步的輸出。GitHub 的主機在美國，第一次請確認 OKX 沒有拒絕連線；如果被拒絕，改在自己的電腦上執行同一支程式（設定同樣的環境變數）。
+
+本機只看、不下單：設定好環境變數後執行 `python scripts/okx_paper.py --dry-run`，會讀取帳戶並印出它打算做的動作。
+
 **啟用 GitHub Pages**：repo → Settings → Pages → Source 選「GitHub Actions」，然後到 Actions 手動執行一次「Update signal & deploy dashboard」。私人 repo 使用 Pages 需要付費方案。
 
 ## 專案結構
@@ -204,10 +221,10 @@ Walk-forward 每年都選到「4h、swing 5、只做多、移動停損、ATR 止
 btc_signal/   data.py 資料源、indicators.py 技術指標、smc.py 結構/OB/FVG、
               signals.py 評分與交易計畫、backtest.py 回測、
               stats.py PSR/DSR 與蒙地卡羅、compare.py 槓桿／等回撤／定期定額比較、
-              ltf.py 在 1h K 線上執行 4h 訊號、flows.py Coinbase 溢價與資金費率特徵、positioning.py 未平倉量、history.py 訊號紀錄、notify.py 推播
+              ltf.py 在 1h K 線上執行 4h 訊號、flows.py Coinbase 溢價與資金費率特徵、positioning.py 未平倉量、history.py 訊號紀錄、notify.py 推播、okx.py OKX API
 data/         funding_seed.csv 資金費率歷史（cache/ 為本機快取，不進版控）
 scripts/      update.py 產生儀表板資料、research.py 參數研究、ltf_research.py 1h 進場研究、
-              flow_research.py 資金流向研究、oi_research.py 爆倉研究
+              flow_research.py 資金流向研究、oi_research.py 爆倉研究、okx_paper.py OKX 模擬交易
 config/       strategy.json 目前採用的參數（由 research.py 產生）
 docs/         儀表板（GitHub Pages 根目錄），data/ 為產出的資料
 tests/        合成資料測試，含 no-lookahead 檢查

@@ -69,6 +69,26 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
         run: python scripts/update.py
 
+      # Mirrors the signal on an OKX *demo trading* account; does nothing until the three
+      # OKX secrets exist. A failure here never blocks the dashboard deploy.
+      - name: Paper trade (OKX demo)
+        continue-on-error: true
+        env:
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+          OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
+          OKX_SECRET_KEY: ${{ secrets.OKX_SECRET_KEY }}
+          OKX_PASSPHRASE: ${{ secrets.OKX_PASSPHRASE }}
+          RISK_PCT: ${{ vars.PAPER_RISK_PCT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python scripts/okx_paper.py
+
       - if: steps.pages.outcome == 'success'
         uses: actions/upload-pages-artifact@v3
         with:
