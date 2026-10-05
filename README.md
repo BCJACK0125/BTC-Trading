@@ -16,6 +16,7 @@ python scripts/update.py      # 抓最新 K 線、計算訊號與回測，寫入
 python scripts/research.py    # 重跑參數研究與過度擬合檢驗（約 2 分鐘），會改寫 config/strategy.json
 python scripts/ltf_research.py  # 1h 進場方式研究（約 1 分鐘）
 python scripts/flow_research.py # Coinbase 溢價與資金費率研究（首次下載 Coinbase 資料約 2 分鐘）
+python scripts/oi_research.py   # 爆倉／槓桿擠壓研究（首次下載未平倉量資料約 1 分鐘）
 python -m pytest -q tests     # 測試（含「不偷看未來資料」檢查）
 python -m btc_signal.notify "測試"  # 選用：測試 Telegram / Discord 推播設定
 ```
@@ -108,6 +109,15 @@ ETF 淨流入只有 2024 年以後的資料，而且全部落在樣本外；CME 
 
 沒有任何設定在樣本內和樣本外都勝過目前策略。最接近的是資金費率擁擠過濾，它在樣本內有幫助，靠的是避開 2020–2021 年資金費率過熱時的進場（2021 年有 34% 的時間近 21 期均值 ≥ 0.03%）。但 2022 年以後資金費率很少這麼高（2024 年 7%，之後 0%），樣本外它只擋掉 3 筆，結果略差。門檻之間也不一致（0.03% 有幫助、0.05% 反而變差），算進試驗次數後 Deflated Sharpe 只有 74%。Coinbase 溢價則兩種用法都沒有幫助：溢價為正、資金費率高，常常正是趨勢最強、這套策略最賺錢的時候，擋掉反而少賺。結論是不加入策略。完整結果：[reports/flow_research.md](reports/flow_research.md)。
 
+### 看爆倉／槓桿擠壓有沒有用？
+
+爆倉熱力圖（Coinglass 等）是用未平倉量加上假設的槓桿分布估算出來的，誤差常有 1–3%，而且歷史資料要付費，無法驗證。`scripts/oi_research.py` 改用 Binance 公開的 5 分鐘未平倉量（2020-09 起，`btc_signal/positioning.py`）：「價格急跌且 OI 大降」代表多單被爆倉洗掉，「價格上漲且 OI 暴增」代表槓桿擁擠。事件門檻只用樣本內的分位數決定。樣本內只能從 2020-09 到 2023（目前策略同期 Sharpe 1.19），2024 以後為樣本外。
+
+- **事件本身**：日線多頭中，「4 小時內跌 ≥ 1.5 ATR 且 OI 跌幅前 5%」之後 24 小時平均漲 +1.12%（樣本內，18 次），一般多頭時段只有 +0.26%；樣本外是 +0.60% 對 +0.11%（14 次）。方向一致，但 t 值只有 1.07 和 0.55，無法和運氣區分。
+- **放進策略**：18 種設定（洗盤後也進場、槓桿擁擠時不進場）有 3 種在樣本內外都略勝，差距都只在幾筆交易之內。照規則用樣本內挑出的最好設定，樣本外 Sharpe 1.37，比目前的 1.51 差；Deflated Sharpe 62%。
+
+結論：現象可能存在，但事件太少、證據不足，不加入策略；資料累積更多年後可以再檢查。完整結果：[reports/oi_research.md](reports/oi_research.md)。
+
 ### 過度擬合檢驗
 
 從 864 組裡挑最好的，本身就會讓回測看起來比實際好。`research.py` 另外做了三項檢驗：
@@ -194,10 +204,10 @@ Walk-forward 每年都選到「4h、swing 5、只做多、移動停損、ATR 止
 btc_signal/   data.py 資料源、indicators.py 技術指標、smc.py 結構/OB/FVG、
               signals.py 評分與交易計畫、backtest.py 回測、
               stats.py PSR/DSR 與蒙地卡羅、compare.py 槓桿／等回撤／定期定額比較、
-              ltf.py 在 1h K 線上執行 4h 訊號、flows.py Coinbase 溢價與資金費率特徵、history.py 訊號紀錄、notify.py 推播
+              ltf.py 在 1h K 線上執行 4h 訊號、flows.py Coinbase 溢價與資金費率特徵、positioning.py 未平倉量、history.py 訊號紀錄、notify.py 推播
 data/         funding_seed.csv 資金費率歷史（cache/ 為本機快取，不進版控）
 scripts/      update.py 產生儀表板資料、research.py 參數研究、ltf_research.py 1h 進場研究、
-              flow_research.py 資金流向研究
+              flow_research.py 資金流向研究、oi_research.py 爆倉研究
 config/       strategy.json 目前採用的參數（由 research.py 產生）
 docs/         儀表板（GitHub Pages 根目錄），data/ 為產出的資料
 tests/        合成資料測試，含 no-lookahead 檢查

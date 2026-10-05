@@ -245,3 +245,19 @@ def test_order_steps_follow_the_state():
     exited = update.order_steps({**base, "signal": {"action": "COOLDOWN"}}, cfg,
                                 [{"exit_time": base["last_bar_close"], "exit": 99_000.0, "r": -0.33, "reason": "time"}])
     assert "已出場" in exited[0] and len(exited) == 1
+
+
+def test_oi_features_no_lookahead_and_stale():
+    from btc_signal import positioning
+    bars = pd.date_range("2024-01-01 04:00", periods=60, freq="4h", tz="UTC")
+    f = pd.DataFrame({"close": np.linspace(100, 110, 60), "atr": 1.0}, index=bars)
+    snaps = pd.date_range(pd.Timestamp("2024-01-01", tz="UTC"), bars[-1], freq="5min")
+    oi = pd.Series(1000.0, index=snaps)
+    cut = bars[30]
+    later = oi.copy()
+    later[later.index > cut] = 500.0                      # OI collapses after the cut
+    a, b = positioning.oi_features(oi, f), positioning.oi_features(later, f)
+    pd.testing.assert_frame_equal(a.loc[:cut], b.loc[:cut])
+    assert b["oi_chg_1"].iloc[31] == pytest.approx(-50.0)
+    gap = oi.drop(oi.index[(oi.index > bars[40] - pd.Timedelta("3h")) & (oi.index <= bars[40])])
+    assert np.isnan(positioning.oi_features(gap, f)["oi_chg_1"].iloc[40])   # no fresh snapshot -> no value

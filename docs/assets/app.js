@@ -468,6 +468,33 @@
       "Coinbase 溢價則是兩種用法都沒有幫助：溢價為正、資金費率高，常常正是趨勢最強、這套策略最賺錢的時候。結論是不加入策略；頁面上方的資金費率仍可當擁擠程度的參考。";
   }
 
+  function renderOi() {
+    const O = window.BTC_OI;
+    if (!O?.best_by_family) { $("oi").hidden = true; return; }
+    const b = O.baseline;
+    $("oi-lede").textContent = `爆倉熱力圖是用未平倉量（OI）加上假設的槓桿分布估算出來的，誤差常有 1–3%，而且沒有免費的歷史資料，所以無法驗證。` +
+      `這裡改用 Binance 公開的 5 分鐘 OI（${O.oi_start} 起），把「價格急跌且 OI 大降」當成多單被爆倉洗掉的事件，把「價格上漲且 OI 暴增」當成槓桿擁擠。` +
+      `樣本內只能從 ${O.is_period}（目前策略同期 Sharpe ${fmt(b.is_sharpe, 2)}），${O.oos_period} 為樣本外。先看事件本身：日線多頭中發生洗盤之後，價格怎麼走？`;
+    const ev = O.events;
+    $("oi-events").innerHTML = `<thead><tr><th>洗盤定義</th><th>期間</th><th>次數</th><th>之後 24h</th><th>上漲比例</th><th>一般多頭 24h</th><th>之後 72h</th><th>一般多頭 72h</th></tr></thead><tbody>` +
+      ev.map((e) => `<tr><td>${e.rule}</td><td>${e.period === "is" ? "樣本內" : "樣本外"}</td><td>${e.events}</td>
+        <td class="${cls(e.event_24h)}">${sgn(e.event_24h, 2)}</td><td>${e.event_24h_up_pct == null ? "—" : fmt(e.event_24h_up_pct, 0) + "%"}</td><td>${sgn(e.base_24h, 2)}</td>
+        <td class="${cls(e.event_72h)}">${sgn(e.event_72h, 2)}</td><td>${sgn(e.base_72h, 2)}</td></tr>`).join("") + "</tbody>";
+    const fam = { flush_add: "洗盤後也進場", crowd_filter: "槓桿擁擠時不進場" };
+    const rows = [["目前策略", "—", b, null], ...Object.entries(O.best_by_family).map(([k, v]) => [fam[k] || k, v.label.split("：")[1] || v.label, v, O.median_by_family[k]])];
+    $("oi-table").innerHTML = `<thead><tr><th>方式</th><th>樣本內最好的設定</th><th>樣本內 Sharpe</th><th>樣本外 Sharpe</th><th>同類中位數（內／外）</th>
+      <th>樣本外年化</th><th>樣本外交易</th><th>影響的訊號</th></tr></thead><tbody>` +
+      rows.map(([name, label, v, med], i) => `<tr${i === 0 ? ' style="font-weight:700"' : ""}><td>${name}</td><td>${label}</td>
+        <td>${fmt(v.is_sharpe, 2)}</td><td class="${cls(v.oos_sharpe)}">${fmt(v.oos_sharpe, 2)}</td><td>${med ? `${fmt(med.is_sharpe, 2)}／${fmt(med.oos_sharpe, 2)}` : "—"}</td>
+        <td>${sgn(v.oos_cagr_pct, 1)}</td><td>${v.oos_trades}</td><td>${v.added_or_blocked || "—"}</td></tr>`).join("") + "</tbody>";
+    const fl = O.best_by_family.flush_add, d = O.deflated_best;
+    $("oi-note").textContent = `洗盤之後的 24 小時，兩段期間都比一般多頭時段漲得多，方向和網路上說的一致；但事件太少（每段只有十幾次），統計上無法和運氣區分（t 值約 1 和 0.6，通常要 2 以上）。` +
+      `放進策略後，${O.n_variants} 種設定有 ${O.beat_both} 種在樣本內外都略勝，但差距都在少數幾筆交易的範圍內。` +
+      (fl ? `照規則用樣本內挑出的最好設定（${fl.label.split("：")[1]}），樣本外反而變差（${fmt(fl.oos_sharpe, 2)} 對 ${fmt(b.oos_sharpe, 2)}）` : "") +
+      (d ? `，Deflated Sharpe 只有 ${fmt(d.dsr, 0)}%。` : "。") +
+      "結論：現象可能存在，但證據不足，不加入策略；資料累積更多年後可以再檢查。";
+  }
+
   function renderResearch() {
     if (!R) { $("res-lede").textContent = "找不到研究資料（docs/data/research.js），請執行 python scripts/research.py。"; $("robust").hidden = true; return; }
     $("res-lede").textContent = `共測試 ${R.n_configs} 組參數（週期、swing 長度、權重、門檻、多空方向、出場方式、止損方式），` +
@@ -678,6 +705,7 @@
   renderRobust();
   renderLtf();
   renderFlows();
+  renderOi();
   renderCompare();
   renderHistory();
   drawCharts();

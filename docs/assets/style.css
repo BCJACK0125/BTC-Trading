@@ -280,3 +280,5 @@ thead th { color: var(--muted); font-weight: 500; font-size: .8rem; }
 .steps li::marker { color: var(--muted); font-weight: 700; }
 .calc + .calc { margin-top: 8px; }
 .calc .rules { margin-top: 8px; }
+
+#oi-table { margin-top: 18px; }
