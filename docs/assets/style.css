@@ -79,9 +79,22 @@ main { max-width: 1240px; margin: 0 auto; padding: 0 24px 48px; }
 
 /* ---- hero ------------------------------------------------------------- */
 .hero {
-  display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 48px;
+  display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 32px 48px;
+  grid-template-areas: "verdict ticket" "paper ticket"; grid-template-rows: auto 1fr;
   padding: 40px 0 36px; border-bottom: 1px solid var(--line);
 }
+.verdict-col { grid-area: verdict; }
+.hero .ticket { grid-area: ticket; }
+.paper-card {
+  grid-area: paper; align-self: start; min-width: 0;
+  border-top: 1px solid var(--line); padding-top: 20px;
+}
+.paper-card h2 { font-size: 1.15rem; margin-bottom: .2rem; }
+.paper-status { font-size: .95rem; color: var(--ink); margin: 4px 0 2px; }
+.paper-status.warn { color: var(--watch); }
+.paper-card .kpis { margin-top: 10px; }
+.paper-card .kpi .v { font-size: 1.5rem; }
+.paper-card .calc { margin-top: 10px; }
 .context-line { color: var(--muted); margin-bottom: .2rem; }
 .verdict {
   font: 900 clamp(3.4rem, 9vw, 6.6rem)/1.05 var(--serif);
@@ -262,6 +275,7 @@ thead th { color: var(--muted); font-weight: 500; font-size: .8rem; }
   .topbar { padding: 10px 16px; gap: 10px 16px; }
   .fresh { margin-left: 0; width: 100%; order: 3; }
   .hero, .two-col, .bt-grid, .bt-grid.three, .bt-grid.even, .method-cols { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .hero { grid-template-areas: "verdict" "ticket" "paper"; grid-template-rows: auto; }
   .ticker { flex-wrap: wrap; }
   .kpis { grid-template-columns: repeat(2, 1fr); }
   .kpi:nth-child(3) { border-left: 0; padding-left: 0; }

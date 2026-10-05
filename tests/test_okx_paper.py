@@ -86,3 +86,12 @@ def test_journal_merge_dedupes():
          "equity_curve": [[1, 100.0], [2, 101.0]]}
     m = P.merge_journal(a, b)
     assert len(m["log"]) == 2 and m["equity_curve"] == [[1, 100.0], [2, 101.0]]
+
+
+def test_repeated_notes_collapse():
+    log = [{"time": "t1", "action": "note", "detail": "不追價"}]
+    rows = [{"time": "t2", "action": "note", "detail": "不追價"}]
+    assert P.collapse_notes(log, rows, "t2") == []
+    assert log[-1]["count"] == 2 and log[-1]["until"] == "t2"
+    new = P.collapse_notes(log, [{"time": "t3", "action": "enter", "detail": "買入"}], "t3")
+    assert len(new) == 1

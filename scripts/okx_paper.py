@@ -247,6 +247,19 @@ def merge_journal(*sources: dict) -> dict:
             "equity_curve": [[t, curve[t]] for t in sorted(curve)]}
 
 
+def collapse_notes(log: list[dict], rows: list[dict], stamp: str) -> list[dict]:
+    """A note identical to the last logged one (e.g. "not chasing" every 4h) only bumps that
+    row's count and end time, so repeats cannot crowd real actions out of the journal."""
+    last, fresh = (log[-1] if log else None), []
+    for r in rows:
+        if r["action"] == "note" and last and last.get("action") == "note" and last.get("detail") == r["detail"]:
+            last["until"], last["count"] = stamp, last.get("count", 1) + 1
+            continue
+        fresh.append(r)
+        last = r
+    return fresh
+
+
 def load_journal(site_url: str) -> dict:
     local = {}
     try:
@@ -299,7 +312,7 @@ def main():
         ex = None
     for r in rows:
         r.update({"time": stamp, "bar": snap["last_bar_close"]})
-    j = merge_journal(journal, {"log": rows})
+    j = merge_journal(journal, {"log": collapse_notes(journal["log"], rows, stamp)})
     if ex is not None:
         j["equity_curve"] = merge_journal(j, {"equity_curve": [[int(now), round(ex["equity"], 2)]]})["equity_curve"]
         j.update({"equity": round(ex["equity"], 2), "last": ex["last"], "position": ex["pos"],
