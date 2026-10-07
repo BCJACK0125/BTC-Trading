@@ -59,6 +59,20 @@ def test_history_merge_and_change_detection():
     assert history.record([], {"bar": 1, "action": "WAIT"})[2] is False
 
 
+def test_exit_on_unpublished_bar_is_backfilled():
+    # held from bar 10, stopped out on bar 14, but bars 13-15 were never published
+    h = [{"bar": 9, "action": "ENTER_LONG"}, {"bar": 10, "action": "IN_POSITION"},
+         {"bar": 12, "action": "IN_POSITION"}, {"bar": 16, "action": "WAIT"}]
+    t = {"entry_time": 10, "exit_time": 14, "entry": 100.0, "exit": 95.0, "r": -1.0, "reason": "stop"}
+    history.attach_exits(h, [t], 1)
+    assert h[3]["closed"] == {"entry": 100.0, "exit": 95.0, "r": -1.0, "reason": "stop", "exit_bar": 14}
+    history.attach_exits(h, [t], 1)                       # idempotent on re-runs
+    assert sum(1 for e in h if e.get("closed")) == 1
+    # a trade the log never showed as held is not attached
+    h2 = [{"bar": 9, "action": "WAIT"}, {"bar": 16, "action": "WAIT"}]
+    assert not history.attach_exits(h2, [t], 1)[1].get("closed")
+
+
 def test_psr_and_dsr():
     rng = np.random.default_rng(0)
     noise = rng.normal(0, 0.01, 2000)

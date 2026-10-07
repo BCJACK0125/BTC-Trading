@@ -299,7 +299,8 @@ def notify_message(out: dict, e: dict, prev: dict | None, site_url: str, tp1_onl
     if tp1_only:
         title = "TP1 已到，止損移到保本"
     elif e.get("closed") and e["action"] != "IN_POSITION":
-        title = f"已出場 {e['closed']['r']:+.2f}R，現在：{e['label']}"
+        late = f"（{local_time(e['closed']['exit_bar'])} 收盤時）" if e["closed"].get("exit_bar") else ""
+        title = f"已出場{late} {e['closed']['r']:+.2f}R，現在：{e['label']}"
     else:
         title = e["label"]
     lines = [f"BTC 訊號台｜{title}",
@@ -322,6 +323,7 @@ def update_history(out: dict, trades: list[dict], cache: Path, site_url: str):
     e = history_entry(out, trades)
     tp1 = history.tp1_reached(hist, e)
     hist, prev, changed = history.record(hist, e)
+    history.attach_exits(hist, trades, out["chart"]["bar_seconds"])
     payload = json.dumps(hist, ensure_ascii=False, separators=(",", ":"), default=_json_default)
     for path in (local, cache / "history.json"):
         path.parent.mkdir(parents=True, exist_ok=True)

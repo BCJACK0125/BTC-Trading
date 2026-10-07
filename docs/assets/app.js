@@ -413,7 +413,7 @@
     $("hist-table").innerHTML = `<thead><tr><th>K 線收盤</th><th>狀態</th><th>分數</th><th>價格</th><th>止損</th><th>TP1</th><th>交易出場</th></tr></thead><tbody>` +
       shown.map((e) => `<tr><td>${dateStr(e.bar)}</td><td><span class="tag ${TONE[e.action] || ""}">${e.label}</span></td>
         <td>${fmt(e.score, 1)}</td><td>${fmt(e.price)}</td><td>${fmt(e.stop)}</td><td>${fmt(e.tp1)}</td>
-        <td>${e.closed ? `<span class="${cls(e.closed.r)}">${sgn(e.closed.r, 2, "R")}</span>（${REASON[e.closed.reason] || e.closed.reason}）` : ""}</td></tr>`).join("") +
+        <td>${e.closed ? `<span class="${cls(e.closed.r)}">${sgn(e.closed.r, 2, "R")}</span>（${REASON[e.closed.reason] || e.closed.reason}${e.closed.exit_bar ? `，${dateStr(e.closed.exit_bar)} 收盤` : ""}）` : ""}</td></tr>`).join("") +
       "</tbody>";
   }
 

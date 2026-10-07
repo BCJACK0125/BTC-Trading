@@ -71,3 +71,30 @@ def tp1_reached(history: list[dict], entry: dict) -> bool:
     was_hit = bool(prev and prev.get("action") == "IN_POSITION" and prev.get("tp1_hit"))
     sent = bool(same_bar and same_bar.get("tp1_hit"))
     return prev is not None and not was_hit and not sent
+
+
+def attach_exits(history: list[dict], trades: list[dict], bar_seconds: int) -> list[dict]:
+    """Record trades that closed on a bar nobody published (a missed or failed run).
+
+    The exit goes on the first published bar at or after it, with `exit_bar` set when
+    that is a later bar. Only trades the log actually showed (ENTER_LONG or
+    IN_POSITION while open) are attached, and a bar keeps any exit it already has.
+    """
+    if not history:
+        return history
+    held = {"ENTER_LONG", "IN_POSITION"}
+    done = {(c["entry"], c["exit"]) for c in (e.get("closed") for e in history) if c}
+    for t in trades:
+        if t["exit_time"] < history[0]["bar"] or (t["entry"], t["exit"]) in done:
+            continue
+        if not any(e.get("action") in held and t["entry_time"] - bar_seconds <= e["bar"] < t["exit_time"]
+                   for e in history):
+            continue
+        target = next((e for e in history if e["bar"] >= t["exit_time"]), None)
+        if target is None or target.get("closed"):
+            continue
+        target["closed"] = {k: t[k] for k in ("entry", "exit", "r", "reason")}
+        if target["bar"] != t["exit_time"]:
+            target["closed"]["exit_bar"] = t["exit_time"]
+        done.add((t["entry"], t["exit"]))
+    return history
