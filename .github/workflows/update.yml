@@ -14,14 +14,15 @@ permissions:
   pages: write
   id-token: write
 
-concurrency:
-  group: pages
-  cancel-in-progress: false
-
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # One signal run at a time (the OKX demo mirror must not act twice in parallel). Kept
+    # separate from deploy, so a hung Pages deploy can no longer hold back later updates.
+    concurrency:
+      group: signal
+      cancel-in-progress: false
     outputs:
       pages: ${{ steps.pages.outcome }}
     steps:
@@ -119,6 +120,11 @@ jobs:
     needs: build
     if: needs.build.outputs.pages == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A newer deploy carries newer data, so it replaces one that is still running or stuck.
+    concurrency:
+      group: pages
+      cancel-in-progress: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
