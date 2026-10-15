@@ -3,7 +3,7 @@ and append to the forward signal log docs/data/history.json.
 
     python scripts/update.py [--cache data/cache]
 
-Runs in GitHub Actions after every 4h candle close (see .github/workflows).
+Runs hourly in GitHub Actions (see .github/workflows); re-runs on the same 4h bar are idempotent.
 Environment (all optional): SITE_URL (deployed dashboard, used to recover the
 signal log), TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID, DISCORD_WEBHOOK_URL.
 """

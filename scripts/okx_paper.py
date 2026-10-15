@@ -5,7 +5,8 @@
 Runs right after scripts/update.py and reads the signal it wrote
 (docs/data/latest.json), so it trades exactly what the dashboard shows:
 
-- system signals an entry (and the signal is fresh) -> market buy sized so the
+- system signals an entry (still inside the next bar, price within MAX_CHASE_R of the
+  signal close) -> market buy sized so the
   stop loses RISK_PCT of equity, then a stop that closes the whole position and a
   reduce-only TP1 limit for half;
 - TP1 filled -> stop to break-even, then raised with the system's trailing stop
@@ -39,7 +40,8 @@ from btc_signal.okx import Okx, OkxError  # noqa: E402
 
 INST = "BTC-USDT-SWAP"
 TD_MODE = "isolated"
-MAX_ENTRY_DELAY_S = 2 * 3600       # do not enter on a signal older than this
+ENTRY_MARGIN_S = 15 * 60          # enter until 15 min before the bar after the signal closes
+MAX_CHASE_R = 0.3                 # skip the entry once price has run more than this many R past the signal
 LATEST = ROOT / "docs" / "data" / "latest.json"
 JOURNAL = ROOT / "docs" / "data" / "paper.json"
 MAX_LOG = 500
@@ -71,13 +73,20 @@ def decide(snap: dict, ex: dict, now: float, risk: float, max_lev: float) -> lis
         acts += [{"type": "cancel_algo", "algo_id": a} for a in ex["stray_algos"] + ([ex["sl"]["algo_id"]] if ex["sl"] else [])]
         acts += [{"type": "cancel_order", "ord_id": o} for o in ex["stray_orders"]]
         if action == "ENTER_LONG":
+            # ENTER_LONG stays on the dashboard for the whole next bar, and scheduled runs often
+            # start hours late, so any run inside that bar may enter, as long as price has not run away.
             age = now - snap["last_bar_close"]
-            if age > MAX_ENTRY_DELAY_S:
+            if age > bar - ENTRY_MARGIN_S:
                 return acts + [{"type": "note", "text": f"進場訊號已過 {age / 3600:.1f} 小時，不追價"}]
             p = snap["plan"]
             R = p["entry"] - p["stop"]
             if R <= 0:
                 return acts + [{"type": "note", "text": "止損距離異常，不進場"}]
+            if ex["last"] <= p["stop"]:
+                return acts + [{"type": "note", "text": f"現價 {ex['last']:,.1f} 已低於止損 {p['stop']:,.1f}，不進場"}]
+            if ex["last"] > p["entry"] + MAX_CHASE_R * R:
+                return acts + [{"type": "note", "text": f"現價 {ex['last']:,.1f} 已比訊號價 {p['entry']:,.1f} 高出 "
+                                                        f"{(ex['last'] - p['entry']) / R:.2f}R，不追價"}]
             qty = min(ex["equity"] * risk / R, ex["equity"] * max_lev / ex["last"])
             contracts = floor_to(qty / spec["ctVal"], spec["lotSz"])
             if contracts < spec["minSz"]:

@@ -2,8 +2,10 @@ name: Update signal & deploy dashboard
 
 on:
   schedule:
-    # 7 minutes after every 4h candle close (UTC). GitHub may start scheduled runs a few minutes late.
-    - cron: "7 0,4,8,12,16,20 * * *"
+    # Hourly. GitHub starts scheduled runs late or drops them under load (in practice only 2-4
+    # of the six 4h-close runs a day happened), and a missed run meant a missed OKX demo entry.
+    # Every run is idempotent: a re-run on the same 4h bar neither notifies nor orders twice.
+    - cron: "7 * * * *"
   workflow_dispatch:
   push:
     branches: [main]

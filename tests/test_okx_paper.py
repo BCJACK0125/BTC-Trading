@@ -39,9 +39,20 @@ def test_enter_sizes_by_risk_and_caps_leverage():
     assert capped["contracts"] * 0.01 * 100_000 <= 10_000 * 3 + 1e-6      # never above max leverage
 
 
+def test_late_run_inside_the_bar_still_enters():
+    # scheduled runs often start hours late; the signal is valid until the next bar closes
+    late = P.decide(snap("ENTER_LONG"), ex(), CLOSE + 3 * 3600, 0.01, 3)
+    assert [a["type"] for a in late] == ["enter"]
+
+
 def test_no_chasing():
-    stale = P.decide(snap("ENTER_LONG"), ex(), CLOSE + 3 * 3600, 0.01, 3)
+    stale = P.decide(snap("ENTER_LONG"), ex(), CLOSE + 4 * 3600 - 60, 0.01, 3)
     assert [a["type"] for a in stale] == ["note"]
+    # R = 2,000: 0.3R above the signal close is the most it will pay; below the stop it never enters
+    ran = P.decide(snap("ENTER_LONG"), ex(last=100_700.0), CLOSE + 600, 0.01, 3)
+    assert [a["type"] for a in ran] == ["note"]
+    assert [a["type"] for a in P.decide(snap("ENTER_LONG"), ex(last=100_500.0), CLOSE + 600, 0.01, 3)] == ["enter"]
+    assert [a["type"] for a in P.decide(snap("ENTER_LONG"), ex(last=97_900.0), CLOSE + 600, 0.01, 3)] == ["note"]
     sys_pos = {"entry": 100_000.0, "stop": 98_000.0, "tp1": 103_000.0, "tp1_hit": False, "entry_time": CLOSE}
     missed = P.decide(snap("IN_POSITION", sys_pos), ex(), CLOSE + 600, 0.01, 3)
     assert [a["type"] for a in missed] == ["note"]
